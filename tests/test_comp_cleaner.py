@@ -1,0 +1,268 @@
+"""Tests para Motor A — Comp Cleaner."""
+
+from datetime import datetime, timedelta, timezone
+
+from app.services.engines.comp_cleaner import (
+    clean_comps,
+    normalize_condition,
+    _compute_relevance,
+    _compute_stats,
+)
+from app.services.marketplace.base import CompsResult, MarketplaceListing
+
+
+def _make_listing(price: float, shipping: float = 0.0, **kwargs) -> MarketplaceListing:
+    return MarketplaceListing(
+        title=kwargs.get("title", "Test Product"),
+        price=price,
+        shipping_price=shipping,
+        total_price=kwargs.get("total_price"),
+        seller_username=kwargs.get("seller_username", "seller1"),
+        seller_feedback_pct=kwargs.get("seller_feedback_pct"),
+        ended_at=kwargs.get("ended_at"),
+        brand=kwargs.get("brand"),
+        model=kwargs.get("model"),
+        item_specifics=kwargs.get("item_specifics"),
+        condition=kwargs.get("condition"),
+    )
+
+
+def _make_comps(prices: list[float], days: int = 30) -> CompsResult:
+    listings = [_make_listing(p) for p in prices]
+    return CompsResult.from_listings(listings, marketplace="ebay", days=days)
+
+
+class TestCompCleaner:
+    def test_empty_comps(self):
+        raw = CompsResult()
+        result = clean_comps(raw)
+        assert result.clean_total == 0
+        assert result.raw_total == 0
+
+    def test_no_outliers_small_set(self):
+        raw = _make_comps([10.0, 12.0, 11.0])
+        result = clean_comps(raw)
+        assert result.clean_total == 3
+        assert result.outliers_removed == 0
+
+    def test_removes_outliers(self):
+        # 10 precios normales + 1 outlier extremo
+        prices = [50.0, 52.0, 48.0, 51.0, 49.0, 53.0, 47.0, 50.0, 51.0, 48.0, 200.0]
+        raw = _make_comps(prices)
+        result = clean_comps(raw)
+        assert result.outliers_removed >= 1
+        assert result.clean_total < len(prices)
+        # El outlier de 200 debe haber sido removido
+        clean_prices = [l.total_price for l in result.listings]
+        assert 200.0 not in clean_prices
+
+    def test_normalizes_prices(self):
+        """Verifica que price + shipping = total_price."""
+        listings = [
+            _make_listing(10.0, shipping=5.0),
+            _make_listing(12.0, shipping=3.0),
+            _make_listing(11.0, shipping=4.0),
+        ]
+        raw = CompsResult.from_listings(listings, days=30)
+        result = clean_comps(raw)
+        # Todos deben tener total_price = price + shipping
+        for l in result.listings:
+            assert l.total_price == l.price + (l.shipping_price or 0)
+
+    def test_statistics_recalculated(self):
+        prices = [10.0, 20.0, 30.0, 40.0, 50.0]
+        raw = _make_comps(prices)
+        result = clean_comps(raw)
+        assert result.median_price > 0
+        assert result.avg_price > 0
+        assert result.std_dev > 0
+        assert result.cv > 0
+        assert result.p25 <= result.median_price <= result.p75
+
+    def test_sales_per_day_calculated(self):
+        prices = [10.0] * 15
+        raw = _make_comps(prices, days=30)
+        result = clean_comps(raw)
+        assert result.sales_per_day == 0.5  # 15 / 30
+
+    def test_cv_calculation(self):
+        """CV = std_dev / avg. Con precios iguales, CV = 0."""
+        prices = [50.0] * 10
+        raw = _make_comps(prices)
+        result = clean_comps(raw)
+        assert result.cv == 0.0
+
+
+class TestComputeStats:
+    def test_empty(self):
+        stats = _compute_stats([])
+        assert stats["median"] == 0.0
+
+    def test_single_value(self):
+        stats = _compute_stats([100.0])
+        assert stats["median"] == 100.0
+        assert stats["avg"] == 100.0
+        assert stats["std_dev"] == 0.0
+
+    def test_known_values(self):
+        stats = _compute_stats([10.0, 20.0, 30.0, 40.0, 50.0])
+        assert stats["median"] == 30.0
+        assert stats["avg"] == 30.0
+
+
+class TestComputeRelevance:
+    def test_exact_match_high_relevance(self):
+        listing = _make_listing(
+            100.0,
+            title="iPhone 15 Pro Max 256GB",
+            brand="Apple",
+            condition="Used",
+            item_specifics={"Model": "iPhone 15 Pro Max", "Storage": "256GB"},
+        )
+        score = _compute_relevance(listing, "iPhone 15 Pro Max 256GB")
+        assert score > 0.65
+
+    def test_unrelated_low_relevance(self):
+        listing = _make_listing(
+            100.0,
+            title="Samsung Galaxy S24 Ultra",
+            brand="Samsung",
+        )
+        score = _compute_relevance(listing, "iPhone 15 Pro Max")
+        assert score < 0.7
+
+
+class TestNormalizeCondition:
+    def test_new(self):
+        assert normalize_condition("New") == "new"
+        assert normalize_condition("Brand New") == "new"
+        assert normalize_condition("New with tags") == "new"
+        assert normalize_condition("New without box") == "new"
+        assert normalize_condition("New other (see details)") == "new"
+
+    def test_used(self):
+        assert normalize_condition("Pre-Owned") == "used"
+        assert normalize_condition("Used") == "used"
+        assert normalize_condition("Very Good") == "used"
+        assert normalize_condition("Acceptable") == "used"
+
+    def test_refurbished(self):
+        assert normalize_condition("Seller refurbished") == "refurbished"
+        assert normalize_condition("Certified - Refurbished") == "refurbished"
+
+    def test_open_box(self):
+        assert normalize_condition("Open box") == "open_box"
+
+    def test_for_parts(self):
+        assert normalize_condition("For parts or not working") == "for_parts"
+
+    def test_unknown(self):
+        assert normalize_condition(None) == "unknown"
+        assert normalize_condition("") == "unknown"
+
+
+class TestConditionFiltering:
+    def _make_comps_with_conditions(self, conditions: list[str]) -> CompsResult:
+        """Crea comps con condiciones específicas, precios en rango normal."""
+        listings = []
+        for i, cond in enumerate(conditions):
+            listings.append(_make_listing(
+                50.0 + i,
+                condition=cond,
+            ))
+        return CompsResult.from_listings(listings, marketplace="ebay", days=30)
+
+    def test_any_keeps_all(self):
+        raw = self._make_comps_with_conditions(
+            ["New", "Used", "Pre-Owned", "New", "Used"]
+        )
+        result = clean_comps(raw, condition="any")
+        assert result.clean_total == 5
+        assert result.condition_filtered == 0
+        assert result.requested_condition == "any"
+
+    def test_new_filters_used(self):
+        raw = self._make_comps_with_conditions(
+            ["New", "New", "New", "Used", "Pre-Owned", "New"]
+        )
+        result = clean_comps(raw, condition="new")
+        assert result.condition_filtered > 0
+        assert result.clean_total == 4  # solo los New
+        assert result.condition_match_rate == 1.0  # todos los finales son new
+
+    def test_used_filters_new(self):
+        raw = self._make_comps_with_conditions(
+            ["Used", "Pre-Owned", "Used", "New", "New", "Used"]
+        )
+        result = clean_comps(raw, condition="used")
+        assert result.condition_filtered > 0
+        assert result.clean_total == 4  # los 3 Used + 1 Pre-Owned (ambos normalizan a "used")
+
+    def test_insufficient_condition_keeps_all(self):
+        """Si <3 comps coinciden, no filtra para no perder datos."""
+        raw = self._make_comps_with_conditions(
+            ["New", "Used", "Used", "Used", "Used"]
+        )
+        result = clean_comps(raw, condition="new")
+        # Solo 1 New, no suficiente para filtrar → mantiene todos
+        assert result.condition_filtered == 0
+        assert result.clean_total == 5
+
+    def test_condition_counts_populated(self):
+        raw = self._make_comps_with_conditions(
+            ["New", "New", "Used", "Open box", "Pre-Owned"]
+        )
+        result = clean_comps(raw, condition="any")
+        assert "new" in result.condition_counts
+        assert "used" in result.condition_counts
+        assert result.condition_counts["new"] == 2
+
+    def test_condition_match_rate_when_mixed(self):
+        """Cuando se pide new pero no se puede filtrar, match_rate refleja la mezcla."""
+        raw = self._make_comps_with_conditions(
+            ["New", "Used", "Used", "Used", "Used"]
+        )
+        result = clean_comps(raw, condition="new")
+        # No se filtró (solo 1 New), match_rate = 1/5 = 0.2
+        assert result.condition_match_rate < 0.5
+
+
+class TestTemporalFiltering:
+    def test_filters_old_listings(self):
+        """Listings fuera de la ventana temporal se filtran."""
+        now = datetime.now(timezone.utc)
+        listings = [
+            # 3 dentro de la ventana (últimos 30 días)
+            _make_listing(50.0, ended_at=now - timedelta(days=5)),
+            _make_listing(52.0, ended_at=now - timedelta(days=10)),
+            _make_listing(48.0, ended_at=now - timedelta(days=20)),
+            # 2 fuera de la ventana (> 30 días)
+            _make_listing(55.0, ended_at=now - timedelta(days=60)),
+            _make_listing(45.0, ended_at=now - timedelta(days=90)),
+        ]
+        raw = CompsResult(listings=listings, days_of_data=30, total_sold=5)
+        result = clean_comps(raw)
+        assert result.clean_total == 3
+
+    def test_keeps_listings_without_ended_at(self):
+        """Listings sin ended_at no se penalizan."""
+        now = datetime.now(timezone.utc)
+        listings = [
+            _make_listing(50.0, ended_at=now - timedelta(days=5)),
+            _make_listing(52.0, ended_at=None),  # sin fecha
+            _make_listing(48.0, ended_at=now - timedelta(days=10)),
+        ]
+        raw = CompsResult(listings=listings, days_of_data=30, total_sold=3)
+        result = clean_comps(raw)
+        assert result.clean_total == 3
+
+    def test_all_old_listings_returns_empty(self):
+        """Si todos los listings son viejos, retorna vacío."""
+        now = datetime.now(timezone.utc)
+        listings = [
+            _make_listing(50.0, ended_at=now - timedelta(days=60)),
+            _make_listing(52.0, ended_at=now - timedelta(days=90)),
+        ]
+        raw = CompsResult(listings=listings, days_of_data=30, total_sold=2)
+        result = clean_comps(raw)
+        assert result.clean_total == 0
