@@ -261,6 +261,17 @@ def _run_pipeline(
     comps_info, _ = _build_comps_info(cleaned, source=f"{marketplace_name}_cleaned")
     estimated_sale = pricing.market_list if has_valid_comps else None
 
+    # Gate: título de comps no coincide con el producto → datos no confiables
+    if has_valid_comps and title_risk.flagged_pct >= 0.50:
+        has_valid_comps = False
+        recommendation = "pass"
+        flag_names = ", ".join(title_risk.top_flags) if title_risk.top_flags else "varios"
+        warnings.append(
+            f"El {title_risk.flagged_pct:.0%} de los comps tienen títulos que no coinciden "
+            f"con el producto buscado (flags: {flag_names}). "
+            "Datos de este marketplace descartados por baja relevancia."
+        )
+
     # Gate: sin comps → pass
     if not has_valid_comps and recommendation != "pass":
         recommendation = "pass"
