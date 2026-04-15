@@ -15,6 +15,7 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://localhost:5173",
         "https://flip-iq-front.vercel.app",
+        "https://www.getflipiq.com",
     ]
 
     # Database
