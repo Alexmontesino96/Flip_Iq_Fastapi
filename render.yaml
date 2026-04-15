@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: flipiq
+    runtime: docker
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        sync: false  # Pegar la connection string de Supabase
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: CORS_ORIGINS
+        value: '["https://tu-frontend.vercel.app"]'
+      - key: APIFY_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: KEEPA_API_KEY
+        sync: false

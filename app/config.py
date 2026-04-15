@@ -1,5 +1,6 @@
 import warnings
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -52,6 +53,15 @@ class Settings(BaseSettings):
     brave_search_api_key: str = ""
 
     model_config = {"env_file": ".env", "extra": "ignore"}
+
+    @model_validator(mode="after")
+    def _fix_database_url(self) -> "Settings":
+        url = self.database_url
+        if url.startswith("postgres://"):
+            self.database_url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgresql://"):
+            self.database_url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return self
 
     def validate_production(self) -> None:
         if self.environment == "production":

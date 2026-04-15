@@ -23,7 +23,25 @@ limiter = Limiter(key_func=get_remote_address, default_limits=[f"{settings.rate_
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Startup — run migrations
+    import asyncio
+    import logging
+
+    logger = logging.getLogger("flipiq.startup")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "alembic", "upgrade", "head",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode == 0:
+            logger.info("Migraciones aplicadas correctamente")
+        else:
+            logger.error("Error en migraciones: %s", stderr.decode())
+    except Exception as e:
+        logger.error("No se pudieron ejecutar migraciones: %s", e)
+
     yield
     # Shutdown
     from app.database import engine
