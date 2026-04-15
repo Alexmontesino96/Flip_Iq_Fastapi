@@ -96,6 +96,25 @@ def _get_amazon_client() -> AmazonClient:
     return _amazon_client
 
 
+# Frases de condición que el usuario puede incluir en el keyword
+_CONDITION_PHRASES = re.compile(
+    r"\b(lightly used|gently used|barely used|heavily used|slightly used|well used"
+    r"|brand new|like new|mint condition|near mint|excellent condition"
+    r"|good condition|fair condition|poor condition"
+    r"|new in box|new with tags|new without tags|new with box|new no box"
+    r"|open box|sealed|unopened|nib|nwt|nwob|nib)\b",
+    re.IGNORECASE,
+)
+
+
+def _clean_search_keyword(keyword: str) -> str:
+    """Elimina frases de condición del keyword para evitar contaminar la búsqueda."""
+    cleaned = _CONDITION_PHRASES.sub("", keyword)
+    # Colapsar espacios, comas sueltas y limpiar
+    cleaned = re.sub(r"[,\s]+", " ", cleaned).strip().strip(",").strip()
+    return cleaned if cleaned else keyword
+
+
 # ---------------------------------------------------------------------------
 # Dataclass interna para resultados del pipeline por marketplace
 # ---------------------------------------------------------------------------
@@ -508,12 +527,18 @@ async def run_analysis(
             keyword = upc_info["title"]
             logger.info("UPC lookup: %s → '%s'", barcode, keyword)
 
+    # 0b. Limpiar keyword: quitar frases de condición que contaminan la búsqueda
+    # ("Lightly Used", "Brand New", etc.) — el filtro de condición se aplica en comp_cleaner
+    search_keyword = _clean_search_keyword(keyword) if keyword else keyword
+    if search_keyword and search_keyword != keyword:
+        logger.info("Keyword limpiado: '%s' → '%s'", keyword, search_keyword)
+
     # -----------------------------------------------------------------------
     # 1. Fetch de comps: eBay + Amazon en PARALELO
     # -----------------------------------------------------------------------
     ebay = _get_ebay_client()
     ebay_coro = ebay.get_sold_comps(
-        barcode=barcode, keyword=keyword, days=30, limit=50,
+        barcode=barcode, keyword=search_keyword, days=30, limit=50,
         condition="any",
     )
 
@@ -521,17 +546,17 @@ async def run_analysis(
     if settings.keepa_api_key:
         amazon = _get_amazon_client()
         amazon_coro = amazon.get_sold_comps(
-            barcode=barcode, keyword=keyword, days=30, limit=50,
+            barcode=barcode, keyword=search_keyword, days=30, limit=50,
         )
         ebay_raw, amazon_raw = await asyncio.gather(ebay_coro, amazon_coro)
     else:
         ebay_raw = await ebay_coro
 
     # 1b. Fallback eBay: si barcode no devolvió, reintentar con keyword
-    if not ebay_raw.listings and barcode and keyword and keyword != barcode:
-        logger.info("eBay barcode sin resultados, reintentando con keyword='%s'", keyword)
+    if not ebay_raw.listings and barcode and search_keyword and search_keyword != barcode:
+        logger.info("eBay barcode sin resultados, reintentando con keyword='%s'", search_keyword)
         ebay_raw = await ebay.get_sold_comps(
-            keyword=keyword, days=30, limit=50, condition="any",
+            keyword=search_keyword, days=30, limit=50, condition="any",
         )
 
     # -----------------------------------------------------------------------
