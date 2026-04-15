@@ -11,7 +11,11 @@ class Settings(BaseSettings):
     debug: bool = True
 
     # CORS
-    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:5173"]
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "https://flip-iq-front.vercel.app",
+    ]
 
     # Database
     database_url: str = "postgresql+asyncpg://flipiq:flipiq@localhost:5432/flipiq"
