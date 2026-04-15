@@ -324,12 +324,16 @@ def _parse_s_item_layout(items) -> list[dict]:
     return results
 
 
-async def scrape_sold_listings(keyword: str, limit: int = 50) -> list[dict]:
+async def scrape_sold_listings(
+    keyword: str, limit: int = 50, proxy_url: str | None = None,
+) -> list[dict]:
     """Scraper directo a eBay sold listings.
 
     Args:
         keyword: Término de búsqueda.
         limit: Máximo de resultados a retornar.
+        proxy_url: URL de proxy residencial (http://user:pass@host:port).
+                   Si se pasa, cada request sale por IP residencial rotativa.
 
     Returns:
         Lista de dicts con formato compatible con Apify.
@@ -343,10 +347,14 @@ async def scrape_sold_listings(keyword: str, limit: int = 50) -> list[dict]:
     page = 1
     max_pages = max(1, (limit + items_per_page - 1) // items_per_page)
 
-    async with httpx.AsyncClient(
-        timeout=SCRAPER_TIMEOUT,
-        follow_redirects=True,
-    ) as client:
+    client_kwargs: dict = {
+        "timeout": SCRAPER_TIMEOUT,
+        "follow_redirects": True,
+    }
+    if proxy_url:
+        client_kwargs["proxy"] = proxy_url
+
+    async with httpx.AsyncClient(**client_kwargs) as client:
         while len(results) < limit and page <= max_pages:
             params = {
                 "_nkw": keyword,

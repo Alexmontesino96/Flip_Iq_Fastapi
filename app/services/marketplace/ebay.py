@@ -2,9 +2,10 @@
 
 Usa scraper propio (httpx + BeautifulSoup) para obtener ventas completadas de eBay.
 Si el scraper falla (429, CAPTCHA, etc.), cae a Apify como fallback si hay token.
-Configurable via EBAY_DATA_SOURCE env var: "scraper" (default) | "apify".
+Configurable via EBAY_DATA_SOURCE env var: "scraper" (default) | "apify" | "rpi".
 """
 
+import itertools
 import logging
 from datetime import datetime, timezone
 
@@ -119,6 +120,14 @@ class EbayClient(MarketplaceClient):
     def __init__(self) -> None:
         self._token = settings.apify_token
         self._data_source = settings.ebay_data_source
+        self._rpi_api_key = settings.rpi_scraper_api_key
+        self._proxy_url = settings.residential_proxy_url or None
+
+        # Pool de RPis: parsear URLs separadas por coma
+        raw = settings.rpi_scraper_urls.strip()
+        self._rpi_urls = [u.strip().rstrip("/") for u in raw.split(",") if u.strip()] if raw else []
+        # Round-robin infinito sobre el pool
+        self._rpi_cycle = itertools.cycle(self._rpi_urls) if self._rpi_urls else None
 
     async def search_by_barcode(self, barcode: str) -> list[MarketplaceListing]:
         comps = await self.get_sold_comps(barcode=barcode, days=30, limit=20)
@@ -157,7 +166,15 @@ class EbayClient(MarketplaceClient):
 
         data: list[dict] | None = None
 
-        if self._data_source == "scraper":
+        if self._data_source == "rpi":
+            data = await self._fetch_via_rpi(query, limit)
+            if data is None:
+                logger.info("RPi proxy falló, intentando scraper directo para '%s'", query)
+                data = await self._fetch_via_scraper(query, limit)
+            if data is None and self._token:
+                logger.info("Scraper directo falló, intentando Apify para '%s'", query)
+                data = await self._fetch_via_apify(query, limit)
+        elif self._data_source == "scraper":
             data = await self._fetch_via_scraper(query, limit)
             if data is None and self._token:
                 logger.info("Scraper falló, intentando fallback a Apify para '%s'", query)
@@ -175,10 +192,56 @@ class EbayClient(MarketplaceClient):
 
         return CompsResult.from_listings(listings, marketplace="ebay", days=days)
 
+    async def _fetch_via_rpi(self, query: str, limit: int) -> list[dict] | None:
+        """Obtiene datos via pool de RPi Scraper Proxies (IPs residenciales).
+
+        Round-robin entre proxies disponibles. Si uno falla, prueba el siguiente.
+        Retorna None solo si todos fallan.
+        """
+        if not self._rpi_urls or not self._rpi_cycle:
+            logger.debug("RPI_SCRAPER_URLS no configuradas")
+            return None
+
+        headers = {}
+        if self._rpi_api_key:
+            headers["X-API-Key"] = self._rpi_api_key
+
+        # Intentar cada RPi del pool una vez (round-robin con failover)
+        for _ in range(len(self._rpi_urls)):
+            rpi_url = next(self._rpi_cycle)
+            try:
+                async with httpx.AsyncClient(timeout=25) as client:
+                    resp = await client.post(
+                        f"{rpi_url}/scrape",
+                        json={"keyword": query, "limit": limit},
+                        headers=headers,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+
+                if not isinstance(data, list):
+                    logger.warning("RPi %s response no es lista: %s", rpi_url, type(data))
+                    continue
+                if not data:
+                    logger.warning("RPi %s retornó 0 resultados para '%s'", rpi_url, query)
+                    return None  # 0 resultados es válido, no reintentar
+                logger.info("RPi %s: %d resultados para '%s'", rpi_url, len(data), query)
+                return data
+
+            except httpx.TimeoutException:
+                logger.warning("RPi %s timeout para '%s', probando siguiente", rpi_url, query)
+            except httpx.HTTPStatusError as e:
+                logger.warning("RPi %s HTTP %s para '%s', probando siguiente", rpi_url, e.response.status_code, query)
+            except Exception as e:
+                logger.warning("RPi %s error para '%s': %s, probando siguiente", rpi_url, query, e)
+
+        logger.warning("Todos los RPi proxies fallaron para '%s'", query)
+        return None
+
     async def _fetch_via_scraper(self, query: str, limit: int) -> list[dict] | None:
-        """Intenta obtener datos via scraper directo. Retorna None si falla."""
+        """Intenta obtener datos via scraper directo. Usa proxy residencial si está configurado."""
         try:
-            data = await scrape_sold_listings(query, limit=limit)
+            data = await scrape_sold_listings(query, limit=limit, proxy_url=self._proxy_url)
             if not data:
                 logger.warning("Scraper retornó 0 resultados para '%s'", query)
                 return None
@@ -199,6 +262,7 @@ class EbayClient(MarketplaceClient):
             logger.error("APIFY_TOKEN no configurado")
             return None
 
+        limit = max(1, limit)
         actor_input = {
             "keyword": query,
             "maxItems": limit,
@@ -209,7 +273,7 @@ class EbayClient(MarketplaceClient):
             async with httpx.AsyncClient(timeout=APIFY_TIMEOUT) as client:
                 resp = await client.post(
                     APIFY_RUN_URL,
-                    params={"token": self._token},
+                    params={"token": self._token, "maxTotalChargeUsd": "5"},
                     json=actor_input,
                 )
                 resp.raise_for_status()

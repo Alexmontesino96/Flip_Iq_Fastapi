@@ -16,7 +16,7 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 _GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
-_GEMINI_MODEL = "gemini-2.0-flash-lite"
+_GEMINI_MODEL = "gemini-2.0-flash"
 _OPENAI_MODEL = "gpt-4o-mini"
 
 # Flag por proceso: si Gemini falla, desactivar para evitar más errores

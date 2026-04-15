@@ -31,7 +31,16 @@ class Settings(BaseSettings):
     apify_token: str = ""
 
     # eBay scraper
-    ebay_data_source: str = "scraper"  # "scraper" (default) | "apify"
+    ebay_data_source: str = "apify"  # "apify" (default) | "scraper" (solo local) | "rpi" (proxy residencial)
+
+    # RPi Scraper Proxy (pool de proxies residenciales)
+    # Comma-separated URLs: "https://rpi1.tunnel.com,https://rpi2.tunnel.com"
+    rpi_scraper_urls: str = ""
+    rpi_scraper_api_key: str = ""
+
+    # Proxy residencial para scraper directo (BrightData, IPRoyal, Smartproxy, etc.)
+    # Formato: http://user:pass@host:port
+    residential_proxy_url: str = ""
 
     # eBay (legacy — no se usan)
     ebay_app_id: str = ""
