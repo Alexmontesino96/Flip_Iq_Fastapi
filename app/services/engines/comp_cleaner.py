@@ -253,6 +253,20 @@ def clean_comps(
             # No hay suficientes comps con esa condición,
             # mantener todos pero registrar el filtro fallido
             condition_filtered = 0
+    else:
+        # Auto-filtro: si la mayoría son "new", excluir "used"/"for_parts"
+        # para evitar que listings usados contaminen el pricing de nuevos
+        new_count = all_conditions.get("new", 0)
+        used_count = all_conditions.get("used", 0) + all_conditions.get("for_parts", 0)
+        total = len(after_outliers)
+        if total >= 5 and new_count >= total * 0.5 and used_count > 0:
+            filtered = [
+                l for l in after_outliers
+                if normalize_condition(l.condition) not in ("used", "for_parts")
+            ]
+            if len(filtered) >= 5:
+                condition_filtered = len(after_outliers) - len(filtered)
+                after_outliers = filtered
 
     # 4. Filtrar por relevancia si hay datos enriquecidos (LLM o detailedSearch)
     relevance_filtered = 0

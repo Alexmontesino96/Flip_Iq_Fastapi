@@ -578,29 +578,27 @@ async def run_analysis(
         primary = ebay_pipeline
 
     # -----------------------------------------------------------------------
-    # 5. Determinar best_marketplace (mayor opportunity score con datos válidos)
+    # 5. Determinar best_marketplace comparando profit real de cada pipeline
     # -----------------------------------------------------------------------
     candidates = [ebay_pipeline]
     if amazon_pipeline:
         candidates.append(amazon_pipeline)
     valid_candidates = [c for c in candidates if c.has_valid_comps]
     if valid_candidates:
-        best = max(valid_candidates, key=lambda c: c.opportunity)
-        best_marketplace = best.marketplace_name
+        best_by_profit = max(valid_candidates, key=lambda c: c.profit_market.profit)
+        best_by_opportunity = max(valid_candidates, key=lambda c: c.opportunity)
+
+        # Si el mismo marketplace gana en ambas métricas, es claro
+        if best_by_profit.marketplace_name == best_by_opportunity.marketplace_name:
+            best_marketplace = best_by_profit.marketplace_name
+            best_marketplace_reason = "best_profit"
+        else:
+            # Diferente ganador: priorizar profit (es lo que importa al seller)
+            best_marketplace = best_by_profit.marketplace_name
+            best_marketplace_reason = "best_profit"
     else:
         best_marketplace = primary.marketplace_name
-
-    # Determinar reason del best marketplace
-    if len(valid_candidates) <= 1:
-        best_marketplace_reason = "best_profit"
-    elif best_marketplace == ebay_pipeline.marketplace_name:
-        best_marketplace_reason = "best_profit"
-    else:
-        # Amazon ganó — ¿por opportunity o profit?
-        if amazon_pipeline and amazon_pipeline.opportunity > ebay_pipeline.opportunity:
-            best_marketplace_reason = "best_opportunity"
-        else:
-            best_marketplace_reason = "best_profit"
+        best_marketplace_reason = "only_available"
 
     # -----------------------------------------------------------------------
     # 6. Motor L: AI Explanation (con datos de AMBOS marketplaces)
