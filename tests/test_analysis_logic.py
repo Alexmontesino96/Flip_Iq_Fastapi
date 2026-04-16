@@ -35,7 +35,7 @@ def test_opportunity_high_profit():
     from app.services.engines.velocity_engine import VelocityResult
     from app.services.engines.risk_engine import RiskResult
 
-    velocity = VelocityResult(score=70, sales_per_day=1.0, category="fast", market_sale_interval_days=1.0, estimated_days_to_sell=None)
+    velocity = VelocityResult(score=70, sales_per_day=1.0, category="very_fast", market_sale_interval_days=1.0, estimated_days_to_sell=None)
     risk = RiskResult(score=75, category="low", factors={})
     confidence = ConfidenceResult(score=60, category="medium", factors={})
     competition = CompetitionResult(hhi=0.1, dominant_seller_share=0.1, unique_sellers=10, category="healthy")
@@ -51,7 +51,7 @@ def test_opportunity_low_profit():
     from app.services.engines.velocity_engine import VelocityResult
     from app.services.engines.risk_engine import RiskResult
 
-    velocity = VelocityResult(score=20, sales_per_day=0.1, category="slow", market_sale_interval_days=10.0, estimated_days_to_sell=None)
+    velocity = VelocityResult(score=20, sales_per_day=0.1, category="moderate", market_sale_interval_days=10.0, estimated_days_to_sell=None)
     risk = RiskResult(score=30, category="high", factors={})
     confidence = ConfidenceResult(score=30, category="low", factors={})
     competition = CompetitionResult(hhi=0.3, dominant_seller_share=0.5, unique_sellers=3, category="concentrated")

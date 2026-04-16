@@ -72,6 +72,8 @@ class CompsResult:
     # Distribucion
     price_buckets: list[PriceBucket] = field(default_factory=list)
     sales_by_date: list[SalesByDate] = field(default_factory=list)
+    # Enrichment
+    image_url: str | None = None
 
     @classmethod
     def from_listings(cls, listings: list[MarketplaceListing], marketplace: str = "", days: int = 30) -> "CompsResult":

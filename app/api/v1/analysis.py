@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.limiter import limiter, _analysis_key, _analysis_limit
 from app.database import get_db
 from app.models.analysis import Analysis
 from app.models.product import Product
@@ -12,7 +13,9 @@ router = APIRouter()
 
 
 @router.post("/", response_model=AnalysisResponse)
+@limiter.limit(_analysis_limit, key_func=_analysis_key)
 async def analyze_product(
+    request: Request,
     payload: AnalysisRequest,
     db: AsyncSession = Depends(get_db),
 ):

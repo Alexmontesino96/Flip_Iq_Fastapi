@@ -508,6 +508,11 @@ def _validate_buy(
             "Bimodal price distribution detected. "
             "There are two distinct price groups — the median may not be representative."
         )
+    elif distribution_shape == "dispersed":
+        warnings.append(
+            "Highly dispersed prices — no clear market consensus. "
+            "Pricing will require careful positioning."
+        )
 
     if profit_market.profit <= 0 and recommendation in ("buy", "buy_small"):
         recommendation = "pass"
@@ -790,6 +795,9 @@ async def run_analysis(
     # -----------------------------------------------------------------------
     try:
         product = await _find_or_create_product(db, barcode, keyword, primary.raw_comps, upc_info)
+        # B16: Enrich image_url from Amazon if missing
+        if product and not product.image_url and amazon_raw and amazon_raw.image_url:
+            product.image_url = amazon_raw.image_url
     except Exception as e:
         logger.warning("DB unavailable, skipping persistence: %s", e)
         product = None
@@ -939,8 +947,27 @@ async def run_analysis(
             barcode=barcode,
             title=product_title,
             brand=fallback_brand,
-            image_url=upc_info.get("image_url") if upc_info else None,
+            image_url=(
+                (upc_info.get("image_url") if upc_info else None)
+                or (amazon_raw.image_url if amazon_raw else None)
+            ),
         )
+
+    logger.info(
+        "ANALYSIS product=%r cost=%.2f marketplace=%s sale=%.2f profit=%s roi=%s "
+        "opportunity=%d recommendation=%s best=%s comps=%d/%d",
+        search_keyword or barcode,
+        cost_price,
+        marketplace,
+        estimated_sale or 0,
+        f"${top_net_profit:.2f}" if top_net_profit is not None else "N/A",
+        f"{top_roi:.1f}%" if top_roi is not None else "N/A",
+        opportunity,
+        recommendation,
+        best_marketplace,
+        primary.cleaned.clean_total,
+        primary.cleaned.raw_total,
+    )
 
     return AnalysisResponse(
         id=analysis_id,
@@ -1029,7 +1056,12 @@ def _build_comparison_text(
 
 
 def _detect_distribution_shape(prices: list[float]) -> str:
-    """Detecta forma de la distribución de precios."""
+    """Detecta forma de la distribución de precios.
+
+    Retorna: 'normal', 'bimodal', 'dispersed', 'insufficient'.
+    Bimodal = dos clusters claros separados por un gap grande.
+    Dispersed = precios muy esparcidos sin clusters claros (CV > 0.5).
+    """
     if len(prices) < 5:
         return "insufficient"
 
@@ -1040,15 +1072,26 @@ def _detect_distribution_shape(prices: list[float]) -> str:
         return "normal"
 
     gaps = [sorted_prices[i + 1] - sorted_prices[i] for i in range(len(sorted_prices) - 1)]
-    sorted_gaps = sorted(gaps)
-    median_gap = sorted_gaps[len(gaps) // 2]
-    max_gap = max(gaps)
+    median_gap = sorted(gaps)[len(gaps) // 2]
 
-    is_outlier = max_gap > median_gap * 2 if median_gap > 0 else max_gap > total_range * 0.3
-    is_significant = max_gap > total_range * 0.20
+    # Check each gap for bimodal split: must have >=2 items on each side
+    for idx, gap in enumerate(gaps):
+        left_count = idx + 1
+        right_count = len(sorted_prices) - left_count
+        if left_count < 2 or right_count < 2:
+            continue
+        gap_ratio = gap / total_range
+        is_outlier = gap > median_gap * 2 if median_gap > 0 else gap_ratio > 0.25
+        is_significant = gap_ratio > 0.15
+        if is_outlier and is_significant:
+            return "bimodal"
 
-    if is_outlier and is_significant:
-        return "bimodal"
+    # Dispersed: many large gaps, no clear center
+    mean = sum(sorted_prices) / len(sorted_prices)
+    variance = sum((p - mean) ** 2 for p in sorted_prices) / len(sorted_prices)
+    cv = (variance ** 0.5) / mean if mean > 0 else 0
+    if cv > 0.50:
+        return "dispersed"
 
     return "normal"
 

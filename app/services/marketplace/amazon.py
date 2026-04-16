@@ -336,6 +336,7 @@ class AmazonClient(MarketplaceClient):
         # Mapear productos a listings
         all_listings: list[MarketplaceListing] = []
         best_rank: int | None = None
+        image_url: str | None = None
 
         for product in products:
             # Ofertas actuales de sellers
@@ -351,6 +352,14 @@ class AmazonClient(MarketplaceClient):
             if rank and (best_rank is None or rank < best_rank):
                 best_rank = rank
 
+            # Extract image URL from Keepa product data
+            if not image_url:
+                images_csv = product.get("imagesCSV")
+                if images_csv:
+                    first_hash = images_csv.split(",")[0].strip()
+                    if first_hash:
+                        image_url = f"https://images-na.ssl-images-amazon.com/images/I/{first_hash}"
+
         if not all_listings:
             logger.info("Keepa: productos encontrados pero sin listings mapeables")
             return CompsResult(marketplace="amazon")
@@ -359,6 +368,7 @@ class AmazonClient(MarketplaceClient):
         all_listings = all_listings[:limit]
 
         result = CompsResult.from_listings(all_listings, marketplace="amazon", days=days)
+        result.image_url = image_url
 
         # Sobreescribir sales_per_day con estimación de BSR (más precisa que contar listings)
         if best_rank:

@@ -81,7 +81,7 @@ class TestFullPipeline:
         # Motor E
         velocity = compute_velocity(cleaned)
         assert 0 <= velocity.score <= 100
-        assert velocity.category in ("very_fast", "fast", "healthy", "slow", "very_slow")
+        assert velocity.category in ("very_fast", "healthy", "moderate", "slow")
 
         # Motor F
         risk = compute_risk(cleaned, raw)
@@ -164,7 +164,7 @@ class TestVelocityEngine:
         cleaned = CleanedComps(sales_per_day=0)
         result = compute_velocity(cleaned)
         assert result.score == 0
-        assert result.category == "very_slow"
+        assert result.category == "slow"
 
     def test_high_velocity(self):
         cleaned = CleanedComps(sales_per_day=2.0, clean_total=60, days_of_data=30)
@@ -432,7 +432,7 @@ class TestListingStrategy:
 
         cleaned = CleanedComps(clean_total=5, cv=0.30)
         velocity = VelocityResult(score=15, sales_per_day=0.05,
-                                  category="very_slow", market_sale_interval_days=20.0,
+                                  category="slow", market_sale_interval_days=20.0,
                                   estimated_days_to_sell=20.0)
         risk = RiskResult(score=30, category="high", factors={})
 

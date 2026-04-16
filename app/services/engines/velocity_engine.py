@@ -14,7 +14,7 @@ from app.services.marketplace.base import CleanedComps
 class VelocityResult:
     score: int
     sales_per_day: float
-    category: str  # very_fast|fast|healthy|slow|very_slow
+    category: str  # very_fast|healthy|moderate|slow
     market_sale_interval_days: float | None  # intervalo entre ventas en el mercado
     estimated_days_to_sell: float | None      # None sin datos de listings activos
 
@@ -34,16 +34,14 @@ def compute_velocity(cleaned: CleanedComps) -> VelocityResult:
 
     score = min(100, round(25 * math.log(1 + 30 * spd)))
 
-    if score >= 80:
+    if spd >= 1.0:
         category = "very_fast"
-    elif score >= 60:
-        category = "fast"
-    elif score >= 40:
+    elif spd >= 0.5:
         category = "healthy"
-    elif score >= 20:
-        category = "slow"
+    elif spd >= 0.1:
+        category = "moderate"
     else:
-        category = "very_slow"
+        category = "slow"
 
     # Intervalo entre ventas del mercado (no es promesa de venta individual)
     interval = round(1 / spd, 1) if spd > 0 else None
