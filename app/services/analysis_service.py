@@ -603,16 +603,26 @@ async def run_analysis(
             barcode=barcode, keyword=search_keyword, days=30, limit=50,
             product_type=product_type,
         )
-        ebay_raw, amazon_raw = await asyncio.gather(ebay_coro, amazon_coro)
+        results = await asyncio.gather(ebay_coro, amazon_coro, return_exceptions=True)
+        ebay_raw = results[0] if not isinstance(results[0], Exception) else CompsResult(listings=[], total_sold=0, median_price=0.0, source="ebay_sold")
+        if isinstance(results[0], Exception):
+            logger.warning("eBay fetch failed, continuing with empty comps: %s", results[0])
+        if isinstance(results[1], Exception):
+            logger.warning("Amazon fetch failed, continuing with eBay only: %s", results[1])
+        else:
+            amazon_raw = results[1]
     else:
         ebay_raw = await ebay_coro
 
     # 1b. Fallback eBay: si barcode no devolvió, reintentar con keyword
     if not ebay_raw.listings and barcode and search_keyword and search_keyword != barcode:
         logger.info("eBay barcode sin resultados, reintentando con keyword='%s'", search_keyword)
-        ebay_raw = await ebay.get_sold_comps(
-            keyword=search_keyword, days=30, limit=50, condition="any",
-        )
+        try:
+            ebay_raw = await ebay.get_sold_comps(
+                keyword=search_keyword, days=30, limit=50, condition="any",
+            )
+        except Exception as e:
+            logger.warning("eBay keyword fallback failed: %s", e)
 
     # -----------------------------------------------------------------------
     # 2. Enriquecer títulos eBay con LLM (Amazon/Keepa ya tiene datos struct.)
