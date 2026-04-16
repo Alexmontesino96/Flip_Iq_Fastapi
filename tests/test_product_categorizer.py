@@ -36,7 +36,7 @@ class TestCategorizeProduct:
 
         with patch(
             "app.services.engines.product_categorizer.get_llm_client",
-            return_value=(mock_client, "gemini-2.0-flash"),
+            return_value=(mock_client, "gemini-2.5-flash"),
         ):
             result = await categorize_product("Oakley Aro3 MIPS Helmet")
             assert result is not None
@@ -56,7 +56,7 @@ class TestCategorizeProduct:
 
         with patch(
             "app.services.engines.product_categorizer.get_llm_client",
-            return_value=(mock_client, "gemini-2.0-flash"),
+            return_value=(mock_client, "gemini-2.5-flash"),
         ):
             result = await categorize_product("iPhone 15 Pro Max")
             assert result is not None
@@ -70,7 +70,7 @@ class TestCategorizeProduct:
 
         with patch(
             "app.services.engines.product_categorizer.get_llm_client",
-            return_value=(mock_client, "gemini-2.0-flash"),
+            return_value=(mock_client, "gemini-2.5-flash"),
         ):
             result = await categorize_product("Nike Air Max 90")
             assert result is not None
@@ -83,7 +83,7 @@ class TestCategorizeProduct:
 
         with patch(
             "app.services.engines.product_categorizer.get_llm_client",
-            return_value=(mock_client, "gemini-2.0-flash"),
+            return_value=(mock_client, "gemini-2.5-flash"),
         ):
             result = await categorize_product("Something")
             assert result is None
@@ -96,7 +96,7 @@ class TestCategorizeProduct:
 
         with patch(
             "app.services.engines.product_categorizer.get_llm_client",
-            return_value=(mock_client, "gemini-2.0-flash"),
+            return_value=(mock_client, "gemini-2.5-flash"),
         ):
             result = await categorize_product("???")
             assert result is None
@@ -108,7 +108,7 @@ class TestCategorizeProduct:
 
         with patch(
             "app.services.engines.product_categorizer.get_llm_client",
-            return_value=(mock_client, "gemini-2.0-flash"),
+            return_value=(mock_client, "gemini-2.5-flash"),
         ):
             result = await categorize_product("Test")
             assert result is None
