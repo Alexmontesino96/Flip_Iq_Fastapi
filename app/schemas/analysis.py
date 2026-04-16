@@ -20,6 +20,7 @@ class AnalysisRequest(BaseModel):
     detailed: bool = False
     condition: str = "any"
     mode: str = "standard"  # "standard" | "premium"
+    product_type: str | None = None  # Override manual del tipo de producto
 
 
 class ChannelBreakdown(BaseModel):
@@ -262,6 +263,10 @@ class AnalysisResponse(BaseModel):
     summary: AnalysisSummary | None = None
     ai_explanation: str | None = None
     market_intelligence: MarketIntelligenceOut | None = None
+
+    # Categorización de producto
+    detected_category: str | None = None
+    category_confidence: float | None = None
 
     # Análisis dual: cada marketplace con su pipeline completo
     ebay_analysis: MarketplaceAnalysis | None = None

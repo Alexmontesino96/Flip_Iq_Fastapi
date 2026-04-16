@@ -182,6 +182,9 @@ class CleanedComps:
     requested_condition: str = "any"
     condition_counts: dict[str, int] = field(default_factory=dict)
     condition_match_rate: float = 1.0
+    # Product type / danger filtering
+    danger_filtered: int = 0
+    product_type_filtered: int = 0
 
 
 class MarketplaceClient(ABC):

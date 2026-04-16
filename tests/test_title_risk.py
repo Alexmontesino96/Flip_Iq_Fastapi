@@ -3,7 +3,7 @@
 from app.services.engines.title_risk import (
     compute_title_risk,
     _build_suppressed_flags,
-    _scan_title,
+    scan_title,
 )
 from app.services.marketplace.base import CleanedComps, MarketplaceListing
 

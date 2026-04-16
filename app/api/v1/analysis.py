@@ -32,6 +32,7 @@ async def analyze_product(
         detailed=payload.detailed,
         condition=payload.condition,
         mode=payload.mode,
+        product_type=payload.product_type,
     )
     return result
 

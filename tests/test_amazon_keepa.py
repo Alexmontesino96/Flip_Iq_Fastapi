@@ -714,3 +714,114 @@ class TestAIExplanationComparison:
             messages = call_args.kwargs["messages"]
             user_msg = messages[1]["content"]
             assert "COMPARACIÓN" in user_msg
+
+
+# --- Product type filter in get_sold_comps ---
+
+class TestAmazonProductTypeFilter:
+    @pytest.mark.asyncio
+    async def test_filters_non_matching_products(self):
+        """product_type filtra productos cuyo título no contiene el tipo."""
+        now = datetime.now(timezone.utc)
+        t = _keepa_minutes(now - timedelta(days=3))
+
+        search_response = {"products": [
+            {"asin": "B0HELM01"}, {"asin": "B0VISOR1"}, {"asin": "B0HELM02"},
+        ]}
+        product_response = {
+            "products": [
+                _make_product(
+                    asin="B0HELM01",
+                    title="Oakley Aro3 MIPS Helmet",
+                    offers=[{"offerCSV": [t, 9999, 0], "condition": 1, "sellerName": "S1", "isFBA": True}],
+                ),
+                _make_product(
+                    asin="B0VISOR1",
+                    title="Oakley ARO3 Replacement Visor",
+                    offers=[{"offerCSV": [t, 1499, 0], "condition": 1, "sellerName": "S2", "isFBA": True}],
+                ),
+                _make_product(
+                    asin="B0HELM02",
+                    title="Oakley Cycling Helmet Pro",
+                    offers=[{"offerCSV": [t, 11999, 0], "condition": 1, "sellerName": "S3", "isFBA": True}],
+                ),
+            ]
+        }
+
+        client = AmazonClient()
+        client._api_key = "test-key"
+
+        with patch.object(client, "_keepa_get", new_callable=AsyncMock) as mock_get:
+            mock_get.side_effect = [search_response, product_response]
+
+            result = await client.get_sold_comps(
+                keyword="Oakley Aro3 Helmet",
+                product_type="helmet",
+            )
+
+            # El visor debe haber sido filtrado
+            for listing in result.listings:
+                assert "visor" not in listing.title.lower()
+
+    @pytest.mark.asyncio
+    async def test_no_filter_if_all_removed(self):
+        """Si product_type filtraría TODO, no filtra nada."""
+        now = datetime.now(timezone.utc)
+        t = _keepa_minutes(now - timedelta(days=3))
+
+        search_response = {"products": [{"asin": "B0VIS01"}]}
+        product_response = {
+            "products": [
+                _make_product(
+                    asin="B0VIS01",
+                    title="Oakley Replacement Visor Clear",
+                    offers=[{"offerCSV": [t, 1999, 0], "condition": 1, "sellerName": "S", "isFBA": True}],
+                ),
+            ]
+        }
+
+        client = AmazonClient()
+        client._api_key = "test-key"
+
+        with patch.object(client, "_keepa_get", new_callable=AsyncMock) as mock_get:
+            mock_get.side_effect = [search_response, product_response]
+
+            result = await client.get_sold_comps(
+                keyword="Oakley Aro3 Helmet",
+                product_type="helmet",
+            )
+
+            # No debería haber filtrado ya que dejaría 0 productos
+            assert len(result.listings) >= 1
+
+    @pytest.mark.asyncio
+    async def test_no_filter_without_product_type(self):
+        """Sin product_type no filtra nada."""
+        now = datetime.now(timezone.utc)
+        t = _keepa_minutes(now - timedelta(days=3))
+
+        search_response = {"products": [{"asin": "B0MIX01"}, {"asin": "B0MIX02"}]}
+        product_response = {
+            "products": [
+                _make_product(
+                    asin="B0MIX01",
+                    title="Oakley Helmet",
+                    offers=[{"offerCSV": [t, 9999, 0], "condition": 1, "sellerName": "S", "isFBA": True}],
+                ),
+                _make_product(
+                    asin="B0MIX02",
+                    title="Oakley Visor",
+                    offers=[{"offerCSV": [t, 1499, 0], "condition": 1, "sellerName": "S", "isFBA": True}],
+                ),
+            ]
+        }
+
+        client = AmazonClient()
+        client._api_key = "test-key"
+
+        with patch.object(client, "_keepa_get", new_callable=AsyncMock) as mock_get:
+            mock_get.side_effect = [search_response, product_response]
+
+            result = await client.get_sold_comps(keyword="Oakley")
+
+            assert len(result.listings) >= 2

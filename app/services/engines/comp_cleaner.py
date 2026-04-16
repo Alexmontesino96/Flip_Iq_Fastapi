@@ -9,10 +9,12 @@ Limpia comps brutos antes de cualquier cálculo:
 """
 
 import math
+import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 
+from app.services.engines.title_risk import scan_title
 from app.services.marketplace.base import (
     CleanedComps,
     CompsResult,
@@ -156,11 +158,68 @@ def _compute_stats(prices: list[float]) -> dict:
     }
 
 
+_DANGER_WEIGHT_THRESHOLD = 0.7  # Solo filtrar flags con peso >= 0.7
+
+
+def _matches_product_type(title: str, product_type: str) -> bool:
+    """Verifica si un título contiene el product_type (singular/plural)."""
+    pt = product_type.lower().strip()
+    title_lower = title.lower()
+    # Chequear singular y plural simple
+    variants = {pt}
+    if pt.endswith("s"):
+        variants.add(pt[:-1])  # "helmets" → "helmet"
+    else:
+        variants.add(pt + "s")  # "helmet" → "helmets"
+    # También manejar "ies" / "y" (e.g. "battery"/"batteries")
+    if pt.endswith("ies"):
+        variants.add(pt[:-3] + "y")
+    elif pt.endswith("y") and not pt.endswith("ey"):
+        variants.add(pt[:-1] + "ies")
+    return any(re.search(r"\b" + re.escape(v) + r"\b", title_lower) for v in variants)
+
+
+def _filter_by_danger(
+    listings: list[MarketplaceListing],
+    keyword: str | None = None,
+) -> tuple[list[MarketplaceListing], int]:
+    """Filtra listings con danger patterns de peso >= threshold.
+
+    No filtra si el keyword contiene la misma palabra peligrosa.
+    """
+    keyword_lower = (keyword or "").lower()
+    kept = []
+    removed = 0
+    for listing in listings:
+        title = listing.title or ""
+        hits = scan_title(title)
+        # Solo considerar flags con weight >= threshold
+        high_danger = [(flag, w) for flag, w in hits if w >= _DANGER_WEIGHT_THRESHOLD]
+        if high_danger:
+            # No filtrar si el keyword contiene la palabra base del flag
+            # e.g. si buscamos "replacement visor", no filtrar "replacement"
+            should_keep = False
+            for flag, _ in high_danger:
+                # Convertir flag_name a palabras: "box_only" → "box only"
+                flag_words = flag.replace("_", " ")
+                if flag_words in keyword_lower:
+                    should_keep = True
+                    break
+            if should_keep:
+                kept.append(listing)
+            else:
+                removed += 1
+        else:
+            kept.append(listing)
+    return kept, removed
+
+
 def clean_comps(
     raw: CompsResult,
     keyword: str | None = None,
     detailed: bool = False,
     condition: str = "any",
+    product_type: str | None = None,
 ) -> CleanedComps:
     """Limpia comps brutos y retorna CleanedComps con estadísticas recalculadas."""
     no_match_rate = 0.0 if condition != "any" else 1.0
@@ -233,6 +292,28 @@ def clean_comps(
     ]
     outliers_removed = len(priced) - len(after_outliers)
 
+    # 2.5. Filtrar por product_type (si se proporcionó)
+    product_type_filtered = 0
+    if product_type and after_outliers:
+        matched_pt = [
+            l for l in after_outliers
+            if _matches_product_type(l.title or "", product_type)
+        ]
+        # Solo aplicar si quedan >= 3 comps
+        if len(matched_pt) >= 3:
+            product_type_filtered = len(after_outliers) - len(matched_pt)
+            after_outliers = matched_pt
+
+    # 2.6. Safety net: filtrar listings con danger patterns de alto peso
+    danger_filtered = 0
+    if after_outliers:
+        after_danger, danger_filtered = _filter_by_danger(after_outliers, keyword)
+        # Solo aplicar si quedan >= 3 comps
+        if len(after_danger) >= 3:
+            after_outliers = after_danger
+        else:
+            danger_filtered = 0
+
     # 3. Filtrar por condición
     condition_filtered = 0
     # Contar condiciones normalizadas en todos los comps (pre-filtro)
@@ -296,6 +377,8 @@ def clean_comps(
             requested_condition=condition,
             condition_counts=dict(all_conditions),
             condition_match_rate=no_match_rate,
+            danger_filtered=danger_filtered,
+            product_type_filtered=product_type_filtered,
         )
 
     # 5. Recalcular estadísticas
@@ -338,4 +421,6 @@ def clean_comps(
         requested_condition=condition,
         condition_counts=dict(final_conditions),
         condition_match_rate=round(match_rate, 4),
+        danger_filtered=danger_filtered,
+        product_type_filtered=product_type_filtered,
     )

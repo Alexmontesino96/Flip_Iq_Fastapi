@@ -7,6 +7,8 @@ from app.services.engines.comp_cleaner import (
     normalize_condition,
     _compute_relevance,
     _compute_stats,
+    _matches_product_type,
+    _filter_by_danger,
 )
 from app.services.marketplace.base import CompsResult, MarketplaceListing
 
@@ -266,3 +268,110 @@ class TestTemporalFiltering:
         raw = CompsResult(listings=listings, days_of_data=30, total_sold=2)
         result = clean_comps(raw)
         assert result.clean_total == 0
+
+
+class TestMatchesProductType:
+    def test_exact_match(self):
+        assert _matches_product_type("Oakley Aro3 MIPS Helmet", "helmet") is True
+
+    def test_plural_match(self):
+        assert _matches_product_type("Nike Running Shoes Size 10", "shoe") is True
+        assert _matches_product_type("Nike Running Shoe", "shoes") is True
+
+    def test_no_match(self):
+        assert _matches_product_type("Oakley ARO3 Replacement Visor", "helmet") is False
+
+    def test_case_insensitive(self):
+        assert _matches_product_type("CYCLING HELMET PRO", "helmet") is True
+
+    def test_ies_plural(self):
+        assert _matches_product_type("Rechargeable Batteries Pack", "battery") is True
+        assert _matches_product_type("AA Battery NiMH", "batteries") is True
+
+
+class TestDangerFilter:
+    def test_filters_replacement(self):
+        listings = [
+            _make_listing(100.0, title="Oakley Aro3 MIPS Helmet"),
+            _make_listing(20.0, title="Oakley Aro3 Replacement Visor"),
+            _make_listing(95.0, title="Oakley Aro3 Helmet Black"),
+            _make_listing(15.0, title="Oakley Shield for Parts"),
+        ]
+        kept, removed = _filter_by_danger(listings, keyword="Oakley Aro3 Helmet")
+        assert removed >= 2  # replacement + for_parts
+        assert len(kept) == 2
+
+    def test_keeps_when_keyword_matches_flag(self):
+        """Si buscamos 'replacement visor', no filtra 'replacement'."""
+        listings = [
+            _make_listing(20.0, title="Oakley ARO3 Replacement Visor"),
+            _make_listing(25.0, title="Oakley Replacement Shield"),
+        ]
+        kept, removed = _filter_by_danger(listings, keyword="Oakley replacement visor")
+        assert removed == 0
+        assert len(kept) == 2
+
+    def test_no_danger_keeps_all(self):
+        listings = [
+            _make_listing(100.0, title="Oakley Aro3 MIPS Helmet"),
+            _make_listing(95.0, title="Oakley Aro3 Helmet Black"),
+        ]
+        kept, removed = _filter_by_danger(listings)
+        assert removed == 0
+        assert len(kept) == 2
+
+
+class TestProductTypeFiltering:
+    def _make_comps_with_titles(self, titles_prices: list[tuple[str, float]]) -> CompsResult:
+        listings = [
+            _make_listing(price, title=title) for title, price in titles_prices
+        ]
+        return CompsResult.from_listings(listings, marketplace="ebay", days=30)
+
+    def test_filters_non_matching_titles(self):
+        raw = self._make_comps_with_titles([
+            ("Oakley Aro3 MIPS Helmet", 100.0),
+            ("Oakley ARO3 Replacement Visor", 20.0),
+            ("Oakley Aro3 Helmet Matte Black", 95.0),
+            ("Oakley Shield Lens Clear", 15.0),
+            ("Oakley Cycling Helmet Pro", 110.0),
+        ])
+        result = clean_comps(raw, keyword="Oakley Aro3 Helmet", product_type="helmet")
+        assert result.product_type_filtered >= 2  # visor + lens
+        # Helmets should remain
+        for l in result.listings:
+            assert "helmet" in l.title.lower()
+
+    def test_no_filter_when_too_few_remain(self):
+        """Si filtrar deja < 3 comps, no filtra."""
+        raw = self._make_comps_with_titles([
+            ("Oakley Aro3 MIPS Helmet", 100.0),
+            ("Oakley ARO3 Replacement Visor", 20.0),
+            ("Oakley Shield Lens", 15.0),
+            ("Oakley Visor Cover", 18.0),
+        ])
+        result = clean_comps(raw, keyword="Oakley Aro3 Helmet", product_type="helmet")
+        # Solo 1 helmet, filtrar dejaría < 3 → no filtra
+        assert result.product_type_filtered == 0
+
+    def test_no_filter_without_product_type(self):
+        raw = self._make_comps_with_titles([
+            ("Oakley Aro3 MIPS Helmet", 100.0),
+            ("Oakley ARO3 Replacement Visor", 20.0),
+            ("Oakley Helmet Black", 95.0),
+        ])
+        result = clean_comps(raw, keyword="Oakley Aro3 Helmet")
+        assert result.product_type_filtered == 0
+
+    def test_danger_filter_in_clean_comps(self):
+        """Danger filter removes high-weight flagged listings."""
+        raw = self._make_comps_with_titles([
+            ("iPhone 15 Pro 256GB", 800.0),
+            ("iPhone 15 Pro Box Only", 30.0),
+            ("iPhone 15 Pro Max", 900.0),
+            ("iPhone 15 Pro Broken Screen", 200.0),
+            ("iPhone 15 Pro 128GB", 750.0),
+        ])
+        result = clean_comps(raw, keyword="iPhone 15 Pro")
+        # "box only" and "broken" should be filtered by danger
+        assert result.danger_filtered >= 1

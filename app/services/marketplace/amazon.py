@@ -6,6 +6,7 @@ para integrarse con el pipeline de análisis existente.
 """
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -274,6 +275,7 @@ class AmazonClient(MarketplaceClient):
         keyword: str | None = None,
         days: int = 30,
         limit: int = 50,
+        product_type: str | None = None,
     ) -> CompsResult:
         """Obtiene comps de Amazon via Keepa.
 
@@ -299,6 +301,37 @@ class AmazonClient(MarketplaceClient):
         if not products:
             logger.info("Keepa: sin resultados para barcode=%s keyword=%s", barcode, keyword)
             return CompsResult(marketplace="amazon")
+
+        # Filtro por product_type: excluir productos cuyo título no contiene el tipo
+        if product_type:
+            pt_lower = product_type.lower().strip()
+            # Generar variantes singular/plural
+            pt_variants = {pt_lower}
+            if pt_lower.endswith("s"):
+                pt_variants.add(pt_lower[:-1])
+            else:
+                pt_variants.add(pt_lower + "s")
+            if pt_lower.endswith("ies"):
+                pt_variants.add(pt_lower[:-3] + "y")
+            elif pt_lower.endswith("y") and not pt_lower.endswith("ey"):
+                pt_variants.add(pt_lower[:-1] + "ies")
+
+            filtered_products = [
+                p for p in products
+                if any(
+                    re.search(r"\b" + re.escape(v) + r"\b", (p.get("title") or "").lower())
+                    for v in pt_variants
+                )
+            ]
+            if filtered_products:
+                removed = len(products) - len(filtered_products)
+                if removed > 0:
+                    logger.info(
+                        "Keepa: filtrado %d/%d productos por product_type='%s'",
+                        removed, len(products), product_type,
+                    )
+                products = filtered_products
+            # Si filtrar deja 0 productos, no filtrar (datos incompletos > sin datos)
 
         # Mapear productos a listings
         all_listings: list[MarketplaceListing] = []

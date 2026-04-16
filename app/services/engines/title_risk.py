@@ -94,7 +94,7 @@ def _build_suppressed_flags(keyword: str | None) -> set[str]:
     return suppressed
 
 
-def _scan_title(title: str, suppressed: set[str] | None = None) -> list[tuple[str, float]]:
+def scan_title(title: str, suppressed: set[str] | None = None) -> list[tuple[str, float]]:
     """Escanea un título y retorna lista de (flag, weight) encontrados."""
     hits = []
     suppressed = suppressed or set()
@@ -135,7 +135,7 @@ def compute_title_risk(
 
     for listing in cleaned.listings:
         title = listing.title or ""
-        hits = _scan_title(title, suppressed)
+        hits = scan_title(title, suppressed)
         if hits:
             flagged_listings += 1
             max_w = 0.0

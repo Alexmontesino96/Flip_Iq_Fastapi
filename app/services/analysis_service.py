@@ -51,9 +51,11 @@ from app.schemas.analysis import (
     TrendOut,
     VelocityOut,
 )
+from app.core.brands import detect_brand
 from app.services.engines.ai_explanation import generate_explanation
 from app.services.engines.market_intelligence import compute_market_intelligence
 from app.services.engines.comp_cleaner import clean_comps
+from app.services.engines.product_categorizer import categorize_product
 from app.services.engines.title_enricher import enrich_listings
 from app.services.engines.competition_engine import compute_competition
 from app.services.engines.confidence_engine import compute_confidence
@@ -166,13 +168,14 @@ def _run_pipeline(
     target_profit: float = 10.0,
     target_roi: float = 0.35,
     enriched: bool = False,
+    product_type: str | None = None,
 ) -> _PipelineResult:
     """Ejecuta los motores A-K + decisión sobre un set de comps.
 
     Es síncrono — todos los motores son funciones puras sin I/O.
     """
     # Motor A: Limpiar comps
-    cleaned = clean_comps(raw_comps, keyword=keyword, condition=condition)
+    cleaned = clean_comps(raw_comps, keyword=keyword, condition=condition, product_type=product_type)
 
     # Motor B: Precios recomendados
     pricing = compute_pricing(cleaned)
@@ -260,17 +263,6 @@ def _run_pipeline(
     has_valid_comps = cleaned.clean_total > 0 and pricing.market_list > 0
     comps_info, _ = _build_comps_info(cleaned, source=f"{marketplace_name}_cleaned")
     estimated_sale = pricing.market_list if has_valid_comps else None
-
-    # Gate: título de comps no coincide con el producto → datos no confiables
-    if has_valid_comps and title_risk.flagged_pct >= 0.50:
-        has_valid_comps = False
-        recommendation = "pass"
-        flag_names = ", ".join(title_risk.top_flags) if title_risk.top_flags else "varios"
-        warnings.append(
-            f"El {title_risk.flagged_pct:.0%} de los comps tienen títulos que no coinciden "
-            f"con el producto buscado (flags: {flag_names}). "
-            "Datos de este marketplace descartados por baja relevancia."
-        )
 
     # Gate: sin comps → pass
     if not has_valid_comps and recommendation != "pass":
@@ -526,6 +518,7 @@ async def run_analysis(
     detailed: bool = False,
     condition: str = "any",
     mode: str = "standard",
+    product_type: str | None = None,
 ) -> AnalysisResponse:
     from app.core.llm import reset_gemini
     reset_gemini()
@@ -545,6 +538,22 @@ async def run_analysis(
         logger.info("Keyword limpiado: '%s' → '%s'", keyword, search_keyword)
 
     # -----------------------------------------------------------------------
+    # 0c. Categorizar producto: LLM extrae product_type del keyword
+    # -----------------------------------------------------------------------
+    category_result = None
+    if product_type:
+        # Override manual del usuario — usar directo
+        logger.info("product_type manual: '%s'", product_type)
+    elif search_keyword:
+        category_result = await categorize_product(search_keyword)
+        if category_result:
+            product_type = category_result.product_type
+            logger.info(
+                "Categorizado: '%s' → product_type='%s' (confidence=%.2f)",
+                search_keyword, product_type, category_result.confidence,
+            )
+
+    # -----------------------------------------------------------------------
     # 1. Fetch de comps: eBay + Amazon en PARALELO
     # -----------------------------------------------------------------------
     ebay = _get_ebay_client()
@@ -558,6 +567,7 @@ async def run_analysis(
         amazon = _get_amazon_client()
         amazon_coro = amazon.get_sold_comps(
             barcode=barcode, keyword=search_keyword, days=30, limit=50,
+            product_type=product_type,
         )
         ebay_raw, amazon_raw = await asyncio.gather(ebay_coro, amazon_coro)
     else:
@@ -593,6 +603,7 @@ async def run_analysis(
         return_reserve_pct=return_reserve_pct,
         target_profit=target_profit,
         target_roi=target_roi,
+        product_type=product_type,
     )
 
     ebay_pipeline = _run_pipeline(
@@ -878,7 +889,7 @@ async def run_analysis(
     else:
         fallback_brand = upc_info.get("brand") if upc_info else None
         if not fallback_brand:
-            fallback_brand = _detect_brand(product_title)
+            fallback_brand = detect_brand(product_title)
         product_summary = ProductSummary(
             id=0,
             barcode=barcode,
@@ -916,6 +927,8 @@ async def run_analysis(
             confidence=market_intel.confidence,
             search_source=market_intel.search_source,
         ) if market_intel and has_valid_comps else None,
+        detected_category=category_result.category if category_result else None,
+        category_confidence=category_result.confidence if category_result else None,
         ebay_analysis=ebay_analysis,
         amazon_analysis=amazon_analysis,
         best_marketplace=best_marketplace,
@@ -1037,35 +1050,6 @@ def _build_comps_info(
     ), distribution_shape
 
 
-_KNOWN_BRANDS = [
-    "Nike", "Adidas", "Apple", "Samsung", "Sony", "Nintendo", "Microsoft", "Google",
-    "LG", "Bose", "JBL", "Canon", "Nikon", "Dyson", "Lego", "Funko",
-    "Jordan", "New Balance", "Puma", "Asics", "Reebok", "Converse", "Vans",
-    "Under Armour", "North Face", "Patagonia", "Columbia",
-    "Dell", "HP", "Lenovo", "Asus", "Acer", "Razer", "Logitech", "Corsair",
-    "KitchenAid", "Instant Pot", "Vitamix", "Cuisinart", "Ninja",
-    "Beats", "AirPods", "Oakley", "Ray-Ban", "Crocs", "Birkenstock",
-    "Pokemon", "Hoka", "On Running", "Brooks", "Saucony", "Salomon",
-]
-_BRAND_PATTERN = re.compile(
-    r"\b(" + "|".join(re.escape(b) for b in _KNOWN_BRANDS) + r")\b",
-    re.IGNORECASE,
-)
-
-
-def _detect_brand(text: str) -> str | None:
-    """Detecta marca conocida en texto (keyword o título)."""
-    if not text:
-        return None
-    match = _BRAND_PATTERN.search(text)
-    if match:
-        matched = match.group(1).lower()
-        for brand in _KNOWN_BRANDS:
-            if brand.lower() == matched:
-                return brand
-    return None
-
-
 async def _find_or_create_product(
     db: AsyncSession,
     barcode: str | None,
@@ -1088,7 +1072,7 @@ async def _find_or_create_product(
                 if product.title == barcode and upc_info.get("title"):
                     product.title = upc_info["title"]
             if not product.brand:
-                product.brand = _detect_brand(product.title)
+                product.brand = detect_brand(product.title)
             return product
 
     if keyword:
@@ -1100,7 +1084,7 @@ async def _find_or_create_product(
             if comps.total_sold > 0:
                 product.avg_sell_price = comps.median_price
             if not product.brand:
-                product.brand = _detect_brand(keyword) or _detect_brand(product.title)
+                product.brand = detect_brand(keyword) or detect_brand(product.title)
             return product
 
     title = keyword or barcode or "Producto sin título"
@@ -1111,7 +1095,7 @@ async def _find_or_create_product(
 
     brand = upc_info.get("brand") if upc_info else None
     if not brand:
-        brand = _detect_brand(keyword or title)
+        brand = detect_brand(keyword or title)
 
     product = Product(
         barcode=barcode,
