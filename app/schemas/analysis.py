@@ -30,6 +30,8 @@ class ChannelBreakdown(BaseModel):
     profit: float
     roi_pct: float       # profit / cost * 100
     margin_pct: float    # profit / sale_price * 100
+    label: str | None = None        # "BEST PROFIT" | "BEST ROI" | None
+    is_estimated: bool = False      # True si no tiene datos scrapeados propios
 
 
 class PriceBucketOut(BaseModel):

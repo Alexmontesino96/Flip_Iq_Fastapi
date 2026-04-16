@@ -80,6 +80,28 @@ def _normalize_price(listing: MarketplaceListing) -> float:
     return base
 
 
+_MODEL_CONTEXT_PREFIXES = frozenset({
+    "size", "sz", "us", "uk", "eu", "pack", "lot", "set", "x", "qty", "quantity", "count",
+})
+
+_MODEL_NUMBER_RE = re.compile(r"(?<!\$)\b([a-z][a-z0-9]*[-]?[a-z]*)\s*(\d+(?:\.\d+)?)\b")
+
+
+def _extract_model_numbers(text: str) -> dict[str, str]:
+    """Extrae pares {base_word: number} de un texto.
+
+    Ej: "Nike Vomero 6 Size 10" → {"vomero": "6"}
+    Ignora prefijos de contexto (size, pack, lot, etc.) y precios ($).
+    """
+    result: dict[str, str] = {}
+    for match in _MODEL_NUMBER_RE.finditer(text.lower()):
+        base_word = match.group(1)
+        number = match.group(2)
+        if base_word not in _MODEL_CONTEXT_PREFIXES:
+            result[base_word] = number
+    return result
+
+
 def _compute_relevance(listing: MarketplaceListing, keyword: str) -> float:
     """Calcula relevancia de un listing respecto al keyword buscado.
 
@@ -90,6 +112,15 @@ def _compute_relevance(listing: MarketplaceListing, keyword: str) -> float:
 
     # Model match: qué tan bien coincide el título con el keyword
     model_match = SequenceMatcher(None, keyword_lower, title_lower).ratio()
+
+    # Penalizar si el modelo numérico es diferente (e.g. Vomero 6 vs Vomero 5)
+    kw_models = _extract_model_numbers(keyword_lower)
+    title_models = _extract_model_numbers(title_lower)
+    if kw_models:
+        for base_word, kw_number in kw_models.items():
+            if base_word in title_models and title_models[base_word] != kw_number:
+                model_match *= 0.3  # Penalización 70% por modelo incorrecto
+                break
 
     # Brand match: si el listing tiene brand y está en el keyword
     brand_match = 0.0

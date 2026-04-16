@@ -7,6 +7,7 @@ from app.services.engines.comp_cleaner import (
     normalize_condition,
     _compute_relevance,
     _compute_stats,
+    _extract_model_numbers,
     _matches_product_type,
     _filter_by_danger,
 )
@@ -375,3 +376,82 @@ class TestProductTypeFiltering:
         result = clean_comps(raw, keyword="iPhone 15 Pro")
         # "box only" and "broken" should be filtered by danger
         assert result.danger_filtered >= 1
+
+
+class TestExtractModelNumbers:
+    def test_simple_model(self):
+        result = _extract_model_numbers("Nike Vomero 6")
+        assert result == {"vomero": "6"}
+
+    def test_multiple_models(self):
+        result = _extract_model_numbers("iPhone 15 Pro 256GB")
+        assert "iphone" in result
+        assert result["iphone"] == "15"
+
+    def test_ignores_size(self):
+        result = _extract_model_numbers("Vomero 6 Size 10")
+        assert "vomero" in result
+        assert "size" not in result
+
+    def test_ignores_pack(self):
+        result = _extract_model_numbers("Battery Pack of 4")
+        assert "pack" not in result
+
+    def test_ps5(self):
+        result = _extract_model_numbers("PS5 Console")
+        assert result == {"ps": "5"}
+
+    def test_empty_string(self):
+        assert _extract_model_numbers("") == {}
+
+    def test_no_numbers(self):
+        assert _extract_model_numbers("Nike Running Shoes") == {}
+
+
+class TestModelNumberPenalty:
+    def test_vomero_6_vs_vomero_5(self):
+        """Bug original: Vomero 5 no debe pasar como comp de Vomero 6."""
+        listing = _make_listing(100.0, title="Nike Vomero 5", brand="Nike")
+        score = _compute_relevance(listing, "Nike Vomero 6")
+        assert score < 0.75
+
+    def test_vomero_6_matches_vomero_6(self):
+        listing = _make_listing(100.0, title="Nike Vomero 6", brand="Nike")
+        score = _compute_relevance(listing, "Nike Vomero 6")
+        assert score > 0.50
+
+    def test_iphone_15_vs_iphone_14(self):
+        listing = _make_listing(800.0, title="iPhone 14 Pro Max", brand="Apple")
+        score = _compute_relevance(listing, "iPhone 15 Pro Max")
+        assert score < 0.75
+
+    def test_size_numbers_not_penalized(self):
+        """Diferencia de talla no debe penalizar el modelo."""
+        listing_10 = _make_listing(100.0, title="Nike Vomero 6 Size 10", brand="Nike")
+        listing_11 = _make_listing(100.0, title="Nike Vomero 6 Size 11", brand="Nike")
+        score_10 = _compute_relevance(listing_10, "Nike Vomero 6 Size 11")
+        score_11 = _compute_relevance(listing_11, "Nike Vomero 6 Size 11")
+        assert abs(score_10 - score_11) < 0.15
+
+    def test_no_model_number_no_penalty(self):
+        listing = _make_listing(100.0, title="Nike Running Shoes", brand="Nike")
+        score = _compute_relevance(listing, "Nike Running Shoes")
+        assert score > 0.40
+
+
+class TestCleanCompsModelFiltering:
+    def test_filters_wrong_model_numbers(self):
+        """3 listings Vomero 6 + 2 Vomero 5 → solo Vomero 6 sobrevive."""
+        specs = {"Brand": "Nike", "Model": "Vomero", "Color": "Black"}
+        listings = [
+            _make_listing(100.0, title="Nike Vomero 6 Black", brand="Nike", condition="New", item_specifics=specs),
+            _make_listing(95.0, title="Nike Vomero 6 White", brand="Nike", condition="New", item_specifics=specs),
+            _make_listing(105.0, title="Nike Vomero 6 Red", brand="Nike", condition="New", item_specifics=specs),
+            _make_listing(80.0, title="Nike Vomero 5 Blue", brand="Nike", condition="New", item_specifics=specs),
+            _make_listing(85.0, title="Nike Vomero 5 Green", brand="Nike", condition="New", item_specifics=specs),
+        ]
+        raw = CompsResult.from_listings(listings, marketplace="ebay", days=30)
+        result = clean_comps(raw, keyword="Nike Vomero 6")
+        assert result.relevance_filtered >= 2
+        for l in result.listings:
+            assert "vomero 5" not in l.title.lower()

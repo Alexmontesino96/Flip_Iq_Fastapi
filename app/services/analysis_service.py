@@ -806,11 +806,15 @@ async def run_analysis(
 
     if has_valid_comps:
         estimated_sale = primary.pricing.market_list
+        own_data_markets = {"ebay"}
+        if amazon_pipeline and amazon_pipeline.has_valid_comps:
+            own_data_markets.add("amazon_fba")
         channels = _calculate_all_channels(
             cost_price, estimated_sale,
             shipping_cost=shipping_cost, packaging_cost=packaging_cost,
             prep_cost=prep_cost, promo_cost=promo_cost,
             return_reserve_pct=return_reserve_pct,
+            has_own_data=own_data_markets,
         )
         # Override amazon_fba channel con datos reales si tenemos pipeline Amazon
         if channels and amazon_pipeline and amazon_pipeline.has_valid_comps:
@@ -830,9 +834,11 @@ async def run_analysis(
                         profit=round(profit, 2),
                         roi_pct=round(profit / invested * 100, 2) if invested > 0 else 0,
                         margin_pct=round(profit / amz_sale * 100, 2) if amz_sale > 0 else 0,
+                        is_estimated=False,
                     )
                     break
             channels.sort(key=lambda c: c.profit, reverse=True)
+            _assign_channel_labels(channels)
     else:
         estimated_sale = None
         channels = None
@@ -1206,8 +1212,11 @@ def _calculate_all_channels(
     prep_cost: float = 0.0,
     promo_cost: float = 0.0,
     return_reserve_pct: float = 0.05,
+    has_own_data: set[str] | None = None,
 ) -> list[ChannelBreakdown]:
     """Calcula profit estimado en cada marketplace."""
+    if has_own_data is None:
+        has_own_data = set()
     channels = []
     for name, calc_fn in MARKETPLACE_CALCULATORS.items():
         fees = calc_fn(Decimal(str(sale_price)))
@@ -1226,7 +1235,24 @@ def _calculate_all_channels(
                 profit=round(profit, 2),
                 roi_pct=round(roi_pct, 2),
                 margin_pct=round(margin_pct, 2),
+                is_estimated=name not in has_own_data,
             )
         )
     channels.sort(key=lambda c: c.profit, reverse=True)
+    _assign_channel_labels(channels)
     return channels
+
+
+def _assign_channel_labels(channels: list[ChannelBreakdown]) -> None:
+    """Asigna labels BEST PROFIT y BEST ROI a los canales."""
+    if not channels:
+        return
+    # Reset labels
+    for ch in channels:
+        ch.label = None
+    # BEST PROFIT: ya está sorted por profit desc → channels[0]
+    channels[0].label = "BEST PROFIT"
+    # BEST ROI: si es diferente al de mejor profit
+    best_roi_idx = max(range(len(channels)), key=lambda i: channels[i].roi_pct)
+    if best_roi_idx != 0:
+        channels[best_roi_idx].label = "BEST ROI"

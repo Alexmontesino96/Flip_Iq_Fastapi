@@ -12,8 +12,14 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are an expert assistant in product reselling/flipping.
 Your job is to explain market analysis results to resellers.
-Be direct, practical and use simple language. Maximum 4 short paragraphs.
-Respond in English.
+Be direct, practical and use simple language. Respond in English.
+
+You MUST write exactly 4 paragraphs with this structure:
+
+1. **Market Overview** — Median sale price, number of comps analyzed, sell-through rate/velocity, and what they tell us about demand.
+2. **Profit Analysis** — Purchase cost, expected sale price, fees, net profit, ROI. State whether the margin is healthy, thin, or negative.
+3. **Risk Factors** — Identify the weakest score in the analysis and explain why it matters. Mention any warnings about competition, price volatility, or low confidence.
+4. **Recommendation** — Clear action: buy (how many units), watch (what trigger to wait for), or pass (why). Include timing if relevant.
 
 Important rules:
 - Scores are 0-100 where higher = better. A risk score of 74 = stable market (low risk).
@@ -132,7 +138,7 @@ async def generate_explanation(
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_msg},
             ],
-            max_tokens=500,
+            max_tokens=1200,
             temperature=0.7,
             timeout=15,
         )
@@ -153,7 +159,7 @@ async def generate_explanation(
                             {"role": "system", "content": SYSTEM_PROMPT},
                             {"role": "user", "content": user_msg},
                         ],
-                        max_tokens=500,
+                        max_tokens=1200,
                         temperature=0.7,
                         timeout=15,
                     )
