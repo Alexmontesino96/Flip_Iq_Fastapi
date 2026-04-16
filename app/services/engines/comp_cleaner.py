@@ -354,6 +354,9 @@ def clean_comps(
         normalize_condition(l.condition) for l in after_outliers
     )
 
+    condition_subset_count = 0
+    condition_subset_median: float | None = None
+
     if condition != "any":
         matched = [
             l for l in after_outliers
@@ -365,7 +368,17 @@ def clean_comps(
             after_outliers = matched
         else:
             # No hay suficientes comps con esa condición,
-            # mantener todos pero registrar el filtro fallido
+            # mantener todos pero calcular stats del subset para informar al usuario
+            condition_subset_count = len(matched)
+            if matched:
+                subset_prices = sorted(l.total_price for l in matched)
+                n_sub = len(subset_prices)
+                condition_subset_median = (
+                    subset_prices[n_sub // 2]
+                    if n_sub % 2 == 1
+                    else (subset_prices[n_sub // 2 - 1] + subset_prices[n_sub // 2]) / 2
+                )
+                condition_subset_median = round(condition_subset_median, 2)
             condition_filtered = 0
     else:
         # Auto-filtro: si la mayoría son "new", excluir "used"/"for_parts"
@@ -456,4 +469,6 @@ def clean_comps(
         condition_match_rate=round(match_rate, 4),
         danger_filtered=danger_filtered,
         product_type_filtered=product_type_filtered,
+        condition_subset_count=condition_subset_count,
+        condition_subset_median=condition_subset_median,
     )

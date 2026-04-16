@@ -229,6 +229,71 @@ class TestConditionFiltering:
         # No se filtró (solo 1 New), match_rate = 1/5 = 0.2
         assert result.condition_match_rate < 0.5
 
+    def test_subset_stats_when_safety_net_activates(self):
+        """Cuando <3 comps matchean, calcula stats del subset."""
+        listings = [
+            _make_listing(300.0, condition="New"),
+            _make_listing(340.0, condition="New"),
+            _make_listing(180.0, condition="Used"),
+            _make_listing(200.0, condition="Used"),
+            _make_listing(210.0, condition="Pre-Owned"),
+            _make_listing(190.0, condition="Used"),
+            _make_listing(195.0, condition="Used"),
+        ]
+        raw = CompsResult.from_listings(listings, marketplace="ebay", days=30)
+        result = clean_comps(raw, condition="new")
+        # Safety net: solo 2 New, < 3 → mantiene todos
+        assert result.condition_filtered == 0
+        assert result.clean_total == 7
+        # Pero calcula stats del subset
+        assert result.condition_subset_count == 2
+        assert result.condition_subset_median == 320.0  # (300+340)/2
+
+    def test_subset_stats_zero_when_filter_applied(self):
+        """Cuando el filtro SÍ se aplica, subset stats son 0/None."""
+        listings = [
+            _make_listing(300.0, condition="New"),
+            _make_listing(310.0, condition="New"),
+            _make_listing(340.0, condition="New"),
+            _make_listing(180.0, condition="Used"),
+            _make_listing(200.0, condition="Used"),
+        ]
+        raw = CompsResult.from_listings(listings, marketplace="ebay", days=30)
+        result = clean_comps(raw, condition="new")
+        # 3 New >= 3 → filtro se aplica
+        assert result.condition_filtered > 0
+        assert result.clean_total == 3
+        # Subset stats no necesarios (filtro aplicó)
+        assert result.condition_subset_count == 0
+        assert result.condition_subset_median is None
+
+    def test_subset_stats_none_when_zero_match(self):
+        """Cuando 0 comps matchean, subset_count=0 y median=None."""
+        listings = [
+            _make_listing(180.0, condition="Used"),
+            _make_listing(200.0, condition="Used"),
+            _make_listing(190.0, condition="Pre-Owned"),
+            _make_listing(195.0, condition="Used"),
+        ]
+        raw = CompsResult.from_listings(listings, marketplace="ebay", days=30)
+        result = clean_comps(raw, condition="new")
+        assert result.condition_subset_count == 0
+        assert result.condition_subset_median is None
+
+    def test_subset_median_single_comp(self):
+        """Cuando solo 1 comp matchea, la mediana es su precio."""
+        listings = [
+            _make_listing(220.0, condition="New"),
+            _make_listing(180.0, condition="Used"),
+            _make_listing(200.0, condition="Used"),
+            _make_listing(190.0, condition="Used"),
+            _make_listing(195.0, condition="Used"),
+        ]
+        raw = CompsResult.from_listings(listings, marketplace="ebay", days=30)
+        result = clean_comps(raw, condition="new")
+        assert result.condition_subset_count == 1
+        assert result.condition_subset_median == 220.0
+
 
 class TestTemporalFiltering:
     def test_filters_old_listings(self):

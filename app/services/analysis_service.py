@@ -436,6 +436,8 @@ def _build_condition_analysis(cleaned: CleanedComps) -> ConditionAnalysisOut:
         condition_filtered=cleaned.condition_filtered,
         mixed_conditions=mixed,
         raw_condition_total=cleaned.raw_total - cleaned.outliers_removed,
+        condition_subset_count=cleaned.condition_subset_count,
+        condition_subset_median=cleaned.condition_subset_median,
     )
 
 
@@ -472,11 +474,22 @@ def _validate_buy(
 
     if cleaned.requested_condition != "any":
         if cleaned.condition_filtered == 0 and cleaned.condition_match_rate < 0.5:
-            warnings.append(
-                f"Few comps in '{cleaned.requested_condition}' condition. "
-                f"Only {cleaned.condition_match_rate:.0%} match. "
-                "Prices may not be representative for that condition."
-            )
+            # Safety net activó: no pudo filtrar por condición
+            if cleaned.condition_subset_median is not None and cleaned.condition_subset_count > 0:
+                warnings.append(
+                    f"Only {cleaned.condition_subset_count} of {cleaned.clean_total} comps "
+                    f"match '{cleaned.requested_condition}' condition "
+                    f"(subset median ${cleaned.condition_subset_median:.2f}). "
+                    f"Prices shown are based on all {cleaned.clean_total} comps "
+                    f"(median ${cleaned.median_price:.2f}). "
+                    f"Results may underestimate the '{cleaned.requested_condition}' market value."
+                )
+            else:
+                warnings.append(
+                    f"No comps found in '{cleaned.requested_condition}' condition. "
+                    f"Prices shown are based on all {cleaned.clean_total} comps (all conditions). "
+                    f"Cannot estimate '{cleaned.requested_condition}' market value."
+                )
             if recommendation == "buy":
                 recommendation = "watch"
         elif cleaned.condition_match_rate < 0.7:

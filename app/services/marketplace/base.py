@@ -187,6 +187,9 @@ class CleanedComps:
     # Product type / danger filtering
     danger_filtered: int = 0
     product_type_filtered: int = 0
+    # Condition subset stats (cuando safety net impide filtrar)
+    condition_subset_count: int = 0
+    condition_subset_median: float | None = None
 
 
 class MarketplaceClient(ABC):
