@@ -1190,7 +1190,10 @@ async def _find_or_create_product(
             return product
 
     title = keyword or barcode or "Untitled product"
-    if comps.listings:
+    if not keyword and comps.listings:
+        # Solo usar título del comp como fallback si no hay keyword,
+        # porque los títulos de eBay incluyen condición/talla del seller
+        # (e.g. "Nintendo Switch OLED - Good Condition") que confunde.
         title = comps.listings[0].title or title
     if upc_info and upc_info.get("title"):
         title = upc_info["title"]
