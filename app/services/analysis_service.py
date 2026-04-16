@@ -108,13 +108,38 @@ _CONDITION_PHRASES = re.compile(
     re.IGNORECASE,
 )
 
+# Mapeo de frases de condición → condición normalizada para auto-detección
+_CONDITION_MAP: dict[str, str] = {
+    "lightly used": "used", "gently used": "used", "barely used": "used",
+    "heavily used": "used", "slightly used": "used", "well used": "used",
+    "good condition": "used", "fair condition": "used", "poor condition": "used",
+    "like new": "used", "excellent condition": "used", "near mint": "used",
+    "brand new": "new", "mint condition": "new",
+    "new in box": "new", "new with tags": "new", "new without tags": "new",
+    "new with box": "new", "new no box": "new",
+    "sealed": "new", "unopened": "new", "nib": "new", "nwt": "new",
+    "nwob": "new",
+    "open box": "open_box",
+}
 
-def _clean_search_keyword(keyword: str) -> str:
-    """Elimina frases de condición del keyword para evitar contaminar la búsqueda."""
+
+def _clean_search_keyword(keyword: str) -> tuple[str, str | None]:
+    """Elimina frases de condición del keyword y detecta condición implícita.
+
+    Returns:
+        (cleaned_keyword, detected_condition) — condition es None si no se detectó.
+    """
+    detected_condition: str | None = None
+    matches = _CONDITION_PHRASES.findall(keyword)
+    if matches:
+        # Tomar la primera frase de condición encontrada
+        phrase = matches[0].lower()
+        detected_condition = _CONDITION_MAP.get(phrase)
+
     cleaned = _CONDITION_PHRASES.sub("", keyword)
     # Colapsar espacios, comas sueltas y limpiar
     cleaned = re.sub(r"[,\s]+", " ", cleaned).strip().strip(",").strip()
-    return cleaned if cleaned else keyword
+    return (cleaned if cleaned else keyword), detected_condition
 
 
 # ---------------------------------------------------------------------------
@@ -533,9 +558,18 @@ async def run_analysis(
 
     # 0b. Limpiar keyword: quitar frases de condición que contaminan la búsqueda
     # ("Lightly Used", "Brand New", etc.) — el filtro de condición se aplica en comp_cleaner
-    search_keyword = _clean_search_keyword(keyword) if keyword else keyword
+    detected_condition: str | None = None
+    if keyword:
+        search_keyword, detected_condition = _clean_search_keyword(keyword)
+    else:
+        search_keyword = keyword
     if search_keyword and search_keyword != keyword:
         logger.info("Keyword limpiado: '%s' → '%s'", keyword, search_keyword)
+
+    # Auto-set condition si el usuario no la especificó pero la incluía en el keyword
+    if condition == "any" and detected_condition:
+        condition = detected_condition
+        logger.info("Condición auto-detectada del keyword: '%s'", condition)
 
     # -----------------------------------------------------------------------
     # 0c. Categorizar producto: LLM extrae product_type del keyword
@@ -585,13 +619,13 @@ async def run_analysis(
     # -----------------------------------------------------------------------
     ebay_enriched = False
     if ebay_raw.listings:
-        ebay_raw = await enrich_listings(ebay_raw, keyword=keyword or barcode)
+        ebay_raw = await enrich_listings(ebay_raw, keyword=search_keyword or barcode)
         ebay_enriched = True
 
     # -----------------------------------------------------------------------
     # 3. Ejecutar pipeline de motores en AMBOS marketplaces
     # -----------------------------------------------------------------------
-    kw = keyword or barcode or ""
+    kw = search_keyword or barcode or ""
     pipeline_kwargs = dict(
         keyword=kw,
         condition=condition,
@@ -877,7 +911,7 @@ async def run_analysis(
     amazon_analysis = _pipeline_to_marketplace_analysis(amazon_pipeline) if amazon_pipeline else None
 
     # Product summary
-    product_title = keyword or (barcode or "Unknown")
+    product_title = search_keyword or (barcode or "Unknown")
     if product is not None:
         product_summary = ProductSummary(
             id=product.id,

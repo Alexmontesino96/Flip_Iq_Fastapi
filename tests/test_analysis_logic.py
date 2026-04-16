@@ -7,7 +7,7 @@ from app.services.engines.comp_cleaner import clean_comps
 from app.services.engines.profit_engine import compute_profit
 from app.services.engines.risk_engine import compute_risk
 from app.services.engines.velocity_engine import compute_velocity
-from app.services.analysis_service import _compute_opportunity_score, _decide, _validate_buy, _detect_distribution_shape
+from app.services.analysis_service import _compute_opportunity_score, _decide, _validate_buy, _detect_distribution_shape, _clean_search_keyword
 from app.services.engines.competition_engine import CompetitionResult
 from app.services.engines.confidence_engine import ConfidenceResult
 from app.services.engines.title_risk import TitleRiskResult
@@ -414,3 +414,40 @@ def test_dominant_seller_warning_in_pipeline():
 
     # Verificar que hay warning de dominant seller
     assert any("Buy Box" in w for w in result.warnings)
+
+
+# --- Clean search keyword with condition auto-detection ---
+
+def test_clean_keyword_strips_lightly_used():
+    cleaned, cond = _clean_search_keyword("Oakley Aro3 MIPS Helmet, Blue/Navy, Medium, Lightly Used")
+    assert "lightly used" not in cleaned.lower()
+    assert "Oakley" in cleaned
+    assert "Helmet" in cleaned
+    assert cond == "used"
+
+
+def test_clean_keyword_strips_brand_new():
+    cleaned, cond = _clean_search_keyword("iPhone 15 Pro Brand New Sealed")
+    assert "brand new" not in cleaned.lower()
+    assert "sealed" not in cleaned.lower()
+    assert "iPhone 15 Pro" in cleaned
+    assert cond == "new"
+
+
+def test_clean_keyword_strips_open_box():
+    cleaned, cond = _clean_search_keyword("PS5 Open Box")
+    assert "open box" not in cleaned.lower()
+    assert "PS5" in cleaned
+    assert cond == "open_box"
+
+
+def test_clean_keyword_no_condition():
+    cleaned, cond = _clean_search_keyword("Oakley Aro3 MIPS Helmet")
+    assert cleaned == "Oakley Aro3 MIPS Helmet"
+    assert cond is None
+
+
+def test_clean_keyword_nib():
+    cleaned, cond = _clean_search_keyword("Nike Air Max 90 NIB")
+    assert "nib" not in cleaned.lower()
+    assert cond == "new"
