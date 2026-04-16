@@ -10,54 +10,54 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """Eres un asistente experto en reselling/flipping de productos.
-Tu trabajo es explicar resultados de análisis de mercado a revendedores.
-Sé directo, práctico y usa lenguaje simple. Máximo 4 párrafos cortos.
-Responde en español.
+SYSTEM_PROMPT = """You are an expert assistant in product reselling/flipping.
+Your job is to explain market analysis results to resellers.
+Be direct, practical and use simple language. Maximum 4 short paragraphs.
+Respond in English.
 
-Reglas importantes:
-- Los scores son 0-100 donde mayor = mejor. Un risk score de 74 = mercado estable (bajo riesgo).
-- Si el riesgo es medio (40-65), matiza la conclusión: recomendar cantidades moderadas, no sobrecomprometerse.
-- Si la recomendación es "buy" pero el riesgo es el score más bajo, menciona que el riesgo es el factor más débil y sugiere prudencia en volumen.
-- Nunca digas "la decisión de comprar es acertada" sin cualificar si hay factores de riesgo. Usa "acertada para cantidades moderadas" o similar.
-- Siempre identifica cuál es el factor más débil del análisis y menciónalo.
-- Si hay datos de comparación entre marketplaces (eBay vs Amazon), analiza las diferencias de precio, velocidad y tendencias. Recomienda en cuál marketplace conviene vender y por qué."""
+Important rules:
+- Scores are 0-100 where higher = better. A risk score of 74 = stable market (low risk).
+- If risk is medium (40-65), qualify the conclusion: recommend moderate quantities, don't overcommit.
+- If the recommendation is "buy" but risk is the lowest score, mention that risk is the weakest factor and suggest caution on volume.
+- Never say "the buy decision is correct" without qualifying if there are risk factors. Use "correct for moderate quantities" or similar.
+- Always identify which is the weakest factor in the analysis and mention it.
+- If there is comparison data between marketplaces (eBay vs Amazon), analyze price, velocity and trend differences. Recommend which marketplace is best to sell on and why."""
 
-USER_TEMPLATE = """Analiza estos resultados para un revendedor:
+USER_TEMPLATE = """Analyze these results for a reseller:
 
-Producto: {keyword}
-Costo de compra: ${cost_price:.2f}
+Product: {keyword}
+Purchase cost: ${cost_price:.2f}
 Marketplace: {marketplace}
 
-PRECIOS RECOMENDADOS:
-- Venta rápida: ${quick_list:.2f}
-- Precio de mercado: ${market_list:.2f}
-- Precio premium: ${stretch_list:.2f}
+RECOMMENDED PRICES:
+- Quick sale: ${quick_list:.2f}
+- Market price: ${market_list:.2f}
+- Stretch price: ${stretch_list:.2f}
 
-PROFIT (al precio de mercado):
-- Ganancia neta: ${profit:.2f}
+PROFIT (at market price):
+- Net profit: ${profit:.2f}
 - ROI: {roi:.1%}
-- Margen: {margin:.1%}
+- Margin: {margin:.1%}
 
-PRECIO MÁXIMO DE COMPRA: ${max_buy:.2f}
+MAX BUY PRICE: ${max_buy:.2f}
 
 SCORES:
-- Velocidad de venta: {velocity_score}/100 ({velocity_cat})
-- Estabilidad del mercado: {risk_score}/100 (riesgo {risk_cat} — score alto = más estable, menos riesgo)
-- Confianza del análisis: {confidence_score}/100 ({confidence_cat})
+- Sell-through rate: {velocity_score}/100 ({velocity_cat})
+- Market stability: {risk_score}/100 (risk {risk_cat} — high score = more stable, less risk)
+- Analysis confidence: {confidence_score}/100 ({confidence_cat})
 - Opportunity Score: {opportunity_score}/100
 
-MERCADO:
-- Comps analizados: {clean_total} de {raw_total} (después de limpieza)
-- Nota sobre muestra: {sample_note}
-- Días estimados para vender: {days_to_sell}
-- Tendencia de demanda: {demand_trend}
-- Competencia: {competition_cat} (HHI: {hhi:.3f})
-- Formato recomendado: {listing_format}
+MARKET:
+- Comps analyzed: {clean_total} of {raw_total} (after cleanup)
+- Sample note: {sample_note}
+- Estimated days to sell: {days_to_sell}
+- Demand trend: {demand_trend}
+- Competition: {competition_cat} (HHI: {hhi:.3f})
+- Recommended format: {listing_format}
 
-DECISIÓN: {recommendation}
+DECISION: {recommendation}
 
-Da tu análisis en español. Sé específico con los números."""
+Give your analysis in English. Be specific with numbers."""
 
 
 async def generate_explanation(
@@ -89,13 +89,13 @@ async def generate_explanation(
     try:
 
         sample_note = (
-            "Muestra pequeña — ser prudente con conclusiones firmes"
+            "Small sample — be cautious with firm conclusions"
             if cleaned_total < 10
-            else "Muestra razonable"
+            else "Reasonable sample"
         )
 
         user_msg = USER_TEMPLATE.format(
-            keyword=keyword or "Desconocido",
+            keyword=keyword or "Unknown",
             cost_price=cost_price,
             marketplace=marketplace,
             quick_list=pricing.quick_list,

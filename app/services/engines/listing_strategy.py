@@ -30,7 +30,7 @@ def compute_listing_strategy(
     if cleaned.clean_total == 0:
         return ListingStrategyResult(
             recommended_format="best_offer",
-            reasoning="Sin datos suficientes. Best offer permite negociar.",
+            reasoning="Insufficient data. Best offer allows negotiation.",
             auction_signal=0.3,
             fixed_price_signal=0.3,
         )
@@ -81,54 +81,54 @@ def compute_listing_strategy(
     # Matiz de variación para el reasoning
     cv = cleaned.cv
     if cv < 0.20:
-        variation_desc = "precios muy consistentes"
+        variation_desc = "very consistent prices"
     elif cv < 0.35:
-        variation_desc = "variación moderada por diferencias de condición o presentación"
+        variation_desc = "moderate variation due to condition or presentation differences"
     else:
-        variation_desc = "variación amplia en precios, posiblemente por bundles o condiciones mixtas"
+        variation_desc = "wide price variation, possibly from bundles or mixed conditions"
 
-    # Descripción de velocidad para reasoning
+    # Velocity description for reasoning
     if velocity.score >= 70:
-        velocity_desc = "alta velocidad de venta"
+        velocity_desc = "high sell-through rate"
     elif velocity.score >= 40:
-        velocity_desc = "velocidad de venta moderada"
+        velocity_desc = "moderate sell-through rate"
     else:
-        velocity_desc = "baja velocidad de venta"
+        velocity_desc = "low sell-through rate"
 
     # Decisión
     if auction_signal >= 0.60 and auction_signal > fixed_price_signal:
         recommended = "auction"
         reasoning = (
-            f"Mercado activo con {velocity_desc} y {variation_desc}. "
-            "La demanda alta favorece subasta donde los compradores compiten."
+            f"Active market with {velocity_desc} and {variation_desc}. "
+            "High demand favors auction where buyers compete."
         )
     elif fixed_price_signal >= 0.50:
         recommended = "fixed_price"
         reasoning = (
-            f"Mercado con {velocity_desc} y {variation_desc}. "
-            "Suficiente consistencia para fixed price, aunque conviene monitorear comps."
+            f"Market with {velocity_desc} and {variation_desc}. "
+            "Enough consistency for fixed price, though monitoring comps is advised."
         )
     else:
         recommended = "best_offer"
         if velocity.score >= 60:
             reasoning = (
-                f"Mercado activo con {velocity_desc} pero {variation_desc}. "
-                "Best offer permite capturar compradores dispuestos a pagar más, "
-                "mientras el volumen garantiza rotación rápida."
+                f"Active market with {velocity_desc} but {variation_desc}. "
+                "Best offer captures buyers willing to pay more, "
+                "while volume ensures fast turnover."
             )
         elif velocity.score >= 30:
             reasoning = (
-                f"Mercado con {velocity_desc} y {variation_desc}. "
-                "Best offer permite negociar y atraer compradores."
+                f"Market with {velocity_desc} and {variation_desc}. "
+                "Best offer allows negotiation and attracts buyers."
             )
         else:
             reasoning = (
-                f"Mercado lento con {velocity_desc} y {variation_desc}. "
-                "Best offer permite negociar y atraer compradores."
+                f"Slow market with {velocity_desc} and {variation_desc}. "
+                "Best offer allows negotiation and attracts buyers."
             )
 
     if cleaned.clean_total < 10:
-        reasoning += f" (basado en solo {cleaned.clean_total} comps — muestra limitada)"
+        reasoning += f" (based on only {cleaned.clean_total} comps — limited sample)"
 
     # suggested_min_offer: mínimo a aceptar cuando formato es best_offer
     min_offer = quick_price if recommended == "best_offer" and quick_price else None

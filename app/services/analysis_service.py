@@ -272,16 +272,16 @@ def _run_pipeline(
     if competition.dominant_seller_share > 0.40:
         pct = round(competition.dominant_seller_share * 100)
         warnings.append(
-            f"Un seller controla el {pct}% del mercado. "
-            "Competir por el Buy Box será difícil."
+            f"One seller controls {pct}% of the market. "
+            "Competing for the Buy Box will be difficult."
         )
 
     # Warning de demand spike temporal
     if trend.demand_trend > 80 and trend.burstiness > 0.25:
         warnings.append(
-            f"Spike de demanda detectado ({trend.demand_trend:+.0f}%). "
-            "Ventas concentradas en pocos días — puede ser temporal. "
-            "Monitorear antes de comprar grandes cantidades."
+            f"Demand spike detected ({trend.demand_trend:+.0f}%). "
+            "Sales concentrated in a few days — may be temporary. "
+            "Monitor before buying large quantities."
         )
 
     # Comps info
@@ -292,15 +292,15 @@ def _run_pipeline(
     # Gate: sin comps → pass
     if not has_valid_comps and recommendation != "pass":
         recommendation = "pass"
-        if not any("comps" in w.lower() or "condición" in w.lower() for w in warnings):
+        if not any("comps" in w.lower() or "condition" in w.lower() for w in warnings):
             if condition != "any":
                 warnings.append(
-                    f"No hay suficientes comps en condición '{condition}'. "
-                    "No se puede estimar precio de venta."
+                    f"Not enough comps in '{condition}' condition. "
+                    "Cannot estimate sale price."
                 )
             else:
                 warnings.append(
-                    "No hay comps válidos. No se puede estimar precio de venta."
+                    "No valid comps. Cannot estimate sale price."
                 )
 
     return _PipelineResult(
@@ -384,7 +384,7 @@ def _compute_opportunity_score(
     else:
         profit_score = 10
 
-    comp_score = 100 if competition.category == "sano" else (60 if competition.category == "moderado" else 30)
+    comp_score = 100 if competition.category == "healthy" else (60 if competition.category == "moderate" else 30)
     trend_bonus = min(20, max(-20, trend.demand_trend / 5))
     market_health = min(100, max(0, comp_score + trend_bonus))
 
@@ -454,17 +454,17 @@ def _validate_buy(
     if max_buy is not None and max_buy.recommended_max > 0 and cost_price > max_buy.recommended_max:
         overpay = cost_price - max_buy.recommended_max
         warnings.append(
-            f"Tu costo (${cost_price:.2f}) excede el máximo recomendado "
-            f"(${max_buy.recommended_max:.2f}) por ${overpay:.2f}. "
-            f"A ${max_buy.recommended_max:.2f} o menos, sería rentable."
+            f"Your cost (${cost_price:.2f}) exceeds the recommended max "
+            f"(${max_buy.recommended_max:.2f}) by ${overpay:.2f}. "
+            f"At ${max_buy.recommended_max:.2f} or less, it would be profitable."
         )
         if recommendation in ("buy", "buy_small"):
             recommendation = "watch"
 
     if confidence.score < 50:
         warnings.append(
-            f"Confianza del análisis baja ({confidence.score}/100). "
-            "Insuficientes datos para recomendar compra."
+            f"Low analysis confidence ({confidence.score}/100). "
+            "Insufficient data to recommend purchase."
         )
         if recommendation in ("buy", "buy_small"):
             recommendation = "watch"
@@ -472,31 +472,31 @@ def _validate_buy(
     if cleaned.requested_condition != "any":
         if cleaned.condition_filtered == 0 and cleaned.condition_match_rate < 0.5:
             warnings.append(
-                f"Pocos comps en condición '{cleaned.requested_condition}'. "
-                f"Solo {cleaned.condition_match_rate:.0%} coinciden. "
-                "Precios pueden no ser representativos para esa condición."
+                f"Few comps in '{cleaned.requested_condition}' condition. "
+                f"Only {cleaned.condition_match_rate:.0%} match. "
+                "Prices may not be representative for that condition."
             )
             if recommendation == "buy":
                 recommendation = "watch"
         elif cleaned.condition_match_rate < 0.7:
             warnings.append(
-                f"Comps mezclados: {cleaned.condition_match_rate:.0%} coinciden "
-                f"con condición '{cleaned.requested_condition}'. "
-                "Considerar revisar manualmente."
+                f"Mixed comps: {cleaned.condition_match_rate:.0%} match "
+                f"'{cleaned.requested_condition}' condition. "
+                "Consider reviewing manually."
             )
 
     if title_risk.manual_review_required:
         warnings.append(
-            f"Títulos ambiguos detectados ({title_risk.flagged_pct:.0%} de comps). "
-            f"Flags: {', '.join(title_risk.top_flags)}. Revisar manualmente."
+            f"Ambiguous titles detected ({title_risk.flagged_pct:.0%} of comps). "
+            f"Flags: {', '.join(title_risk.top_flags)}. Review manually."
         )
         if recommendation == "buy" and title_risk.risk_score > 0.4:
             recommendation = "buy_small"
 
     if cleaned.clean_total < 5:
         warnings.append(
-            f"Solo {cleaned.clean_total} comps después de limpieza. "
-            "Resultados pueden no ser representativos."
+            f"Only {cleaned.clean_total} comps after cleanup. "
+            "Results may not be representative."
         )
         if recommendation == "buy" and cleaned.clean_total < 3:
             recommendation = "buy_small"
@@ -505,18 +505,18 @@ def _validate_buy(
 
     if distribution_shape == "bimodal":
         warnings.append(
-            "Distribución de precios bimodal detectada. "
-            "Hay dos grupos de precio distintos — la mediana puede no ser representativa."
+            "Bimodal price distribution detected. "
+            "There are two distinct price groups — the median may not be representative."
         )
 
     if profit_market.profit <= 0 and recommendation in ("buy", "buy_small"):
         recommendation = "pass"
-        warnings.append("Profit negativo. No se recomienda comprar.")
+        warnings.append("Negative profit. Purchase not recommended.")
 
     if cleaned.cv > 0.50:
         warnings.append(
-            f"Alta dispersión de precios (CV={cleaned.cv:.2f}). "
-            "El mercado es volátil."
+            f"High price dispersion (CV={cleaned.cv:.2f}). "
+            "The market is volatile."
         )
 
     return recommendation, warnings
@@ -743,9 +743,9 @@ async def run_analysis(
                 factors=risk.factors,
             )
             if risk.score < 30:
-                risk = type(risk)(score=risk.score, category="alto", factors=risk.factors)
+                risk = type(risk)(score=risk.score, category="high", factors=risk.factors)
             elif risk.score < 60:
-                risk = type(risk)(score=risk.score, category="medio", factors=risk.factors)
+                risk = type(risk)(score=risk.score, category="medium", factors=risk.factors)
 
         if market_intel.product_lifecycle == "end_of_life":
             risk = type(risk)(
@@ -754,25 +754,25 @@ async def run_analysis(
                 factors=risk.factors,
             )
             if risk.score < 30:
-                risk = type(risk)(score=risk.score, category="alto", factors=risk.factors)
+                risk = type(risk)(score=risk.score, category="high", factors=risk.factors)
             elif risk.score < 60:
-                risk = type(risk)(score=risk.score, category="medio", factors=risk.factors)
+                risk = type(risk)(score=risk.score, category="medium", factors=risk.factors)
 
         seasonal_adj = round(market_intel.seasonal_factor * 10)
         opportunity = max(0, min(100, opportunity + seasonal_adj))
 
         for ev in market_intel.market_events:
-            if ev.impact == "negativo" and ev.relevance == "alta":
-                warnings.append(f"Evento de mercado: {ev.event}")
+            if ev.impact == "negative" and ev.relevance == "high":
+                warnings.append(f"Market event: {ev.event}")
 
         if (
             market_intel.timing_recommendation == "wait"
             and recommendation in ("buy", "buy_small")
-            and market_intel.confidence == "alta"
+            and market_intel.confidence == "high"
         ):
             recommendation = "watch"
             warnings.append(
-                "Market intelligence recomienda esperar antes de comprar."
+                "Market intelligence recommends waiting before buying."
             )
 
     # -----------------------------------------------------------------------
@@ -1121,7 +1121,7 @@ async def _find_or_create_product(
                 product.brand = detect_brand(keyword) or detect_brand(product.title)
             return product
 
-    title = keyword or barcode or "Producto sin título"
+    title = keyword or barcode or "Untitled product"
     if comps.listings:
         title = comps.listings[0].title or title
     if upc_info and upc_info.get("title"):

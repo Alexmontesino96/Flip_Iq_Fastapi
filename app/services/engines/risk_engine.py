@@ -16,8 +16,8 @@ from app.services.marketplace.base import CleanedComps, CompsResult
 
 @dataclass
 class RiskResult:
-    score: int           # 0-100 (100=bajo riesgo, 0=alto riesgo)
-    category: str        # bajo|medio|alto
+    score: int           # 0-100 (100=low risk, 0=high risk)
+    category: str        # low|medium|high
     factors: dict[str, float]
 
 
@@ -26,7 +26,7 @@ def compute_risk(cleaned: CleanedComps, raw: CompsResult) -> RiskResult:
     if cleaned.clean_total == 0:
         return RiskResult(
             score=0,
-            category="alto",
+            category="high",
             factors={"no_data": 1.0},
         )
 
@@ -53,11 +53,11 @@ def compute_risk(cleaned: CleanedComps, raw: CompsResult) -> RiskResult:
     score = min(100, max(0, round(score)))
 
     if score >= 70:
-        category = "bajo"
+        category = "low"
     elif score >= 40:
-        category = "medio"
+        category = "medium"
     else:
-        category = "alto"
+        category = "high"
 
     return RiskResult(
         score=score,

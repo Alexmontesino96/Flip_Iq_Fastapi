@@ -35,11 +35,11 @@ def test_opportunity_high_profit():
     from app.services.engines.velocity_engine import VelocityResult
     from app.services.engines.risk_engine import RiskResult
 
-    velocity = VelocityResult(score=70, sales_per_day=1.0, category="rapido", market_sale_interval_days=1.0, estimated_days_to_sell=None)
-    risk = RiskResult(score=75, category="bajo", factors={})
-    confidence = ConfidenceResult(score=60, category="media", factors={})
-    competition = CompetitionResult(hhi=0.1, dominant_seller_share=0.1, unique_sellers=10, category="sano")
-    trend = TrendResult(demand_trend=5.0, price_trend=2.0, coverage_ratio=0.5, burstiness=0.1, confidence="media", category="estable")
+    velocity = VelocityResult(score=70, sales_per_day=1.0, category="fast", market_sale_interval_days=1.0, estimated_days_to_sell=None)
+    risk = RiskResult(score=75, category="low", factors={})
+    confidence = ConfidenceResult(score=60, category="medium", factors={})
+    competition = CompetitionResult(hhi=0.1, dominant_seller_share=0.1, unique_sellers=10, category="healthy")
+    trend = TrendResult(demand_trend=5.0, price_trend=2.0, coverage_ratio=0.5, burstiness=0.1, confidence="medium", category="stable")
 
     score = _compute_opportunity_score(profit, velocity, risk, confidence, competition, trend)
     assert score >= 60
@@ -51,11 +51,11 @@ def test_opportunity_low_profit():
     from app.services.engines.velocity_engine import VelocityResult
     from app.services.engines.risk_engine import RiskResult
 
-    velocity = VelocityResult(score=20, sales_per_day=0.1, category="lento", market_sale_interval_days=10.0, estimated_days_to_sell=None)
-    risk = RiskResult(score=30, category="alto", factors={})
-    confidence = ConfidenceResult(score=30, category="baja", factors={})
-    competition = CompetitionResult(hhi=0.3, dominant_seller_share=0.5, unique_sellers=3, category="concentrado")
-    trend = TrendResult(demand_trend=-20.0, price_trend=-10.0, coverage_ratio=0.2, burstiness=0.5, confidence="baja", category="bajando")
+    velocity = VelocityResult(score=20, sales_per_day=0.1, category="slow", market_sale_interval_days=10.0, estimated_days_to_sell=None)
+    risk = RiskResult(score=30, category="high", factors={})
+    confidence = ConfidenceResult(score=30, category="low", factors={})
+    competition = CompetitionResult(hhi=0.3, dominant_seller_share=0.5, unique_sellers=3, category="concentrated")
+    trend = TrendResult(demand_trend=-20.0, price_trend=-10.0, coverage_ratio=0.2, burstiness=0.5, confidence="low", category="declining")
 
     score = _compute_opportunity_score(profit, velocity, risk, confidence, competition, trend)
     assert score < 40
@@ -68,7 +68,7 @@ def test_risk_no_data():
     raw = CompsResult()
     risk = compute_risk(cleaned, raw)
     assert risk.score == 0
-    assert risk.category == "alto"
+    assert risk.category == "high"
 
 
 def test_risk_stable_market():
@@ -116,8 +116,8 @@ def test_velocity_medium():
 def test_decide_buy():
     profit = compute_profit(150.0, 50.0, "ebay")
     from app.services.engines.risk_engine import RiskResult
-    risk = RiskResult(score=70, category="bajo", factors={})
-    confidence = ConfidenceResult(score=60, category="media", factors={})
+    risk = RiskResult(score=70, category="low", factors={})
+    confidence = ConfidenceResult(score=60, category="medium", factors={})
     result = _decide(70, profit, risk, confidence)
     assert result == "buy"
 
@@ -126,8 +126,8 @@ def test_decide_buy_small():
     """ROI alto pero confidence/opportunity no alcanza para buy completo → buy_small."""
     profit = compute_profit(120.0, 50.0, "ebay")  # ROI > 20%
     from app.services.engines.risk_engine import RiskResult
-    risk = RiskResult(score=50, category="medio", factors={})
-    confidence = ConfidenceResult(score=20, category="baja", factors={})
+    risk = RiskResult(score=50, category="medium", factors={})
+    confidence = ConfidenceResult(score=20, category="low", factors={})
     # opportunity 50: entre 45 y 60, profit > 0, roi > 0.20, risk >= 30
     result = _decide(50, profit, risk, confidence)
     assert result == "buy_small"
@@ -136,8 +136,8 @@ def test_decide_buy_small():
 def test_decide_watch():
     profit = compute_profit(80.0, 60.0, "ebay")
     from app.services.engines.risk_engine import RiskResult
-    risk = RiskResult(score=50, category="medio", factors={})
-    confidence = ConfidenceResult(score=40, category="media", factors={})
+    risk = RiskResult(score=50, category="medium", factors={})
+    confidence = ConfidenceResult(score=40, category="medium", factors={})
     result = _decide(40, profit, risk, confidence)
     assert result == "watch"
 
@@ -145,8 +145,8 @@ def test_decide_watch():
 def test_decide_pass():
     profit = compute_profit(50.0, 60.0, "ebay")  # pérdida
     from app.services.engines.risk_engine import RiskResult
-    risk = RiskResult(score=20, category="alto", factors={})
-    confidence = ConfidenceResult(score=20, category="baja", factors={})
+    risk = RiskResult(score=20, category="high", factors={})
+    confidence = ConfidenceResult(score=20, category="low", factors={})
     result = _decide(20, profit, risk, confidence)
     assert result == "pass"
 
@@ -155,7 +155,7 @@ def test_decide_pass():
 
 def test_validate_buy_degrades_to_watch_on_low_confidence():
     """buy con confianza < 50 → watch (no buy_small)."""
-    confidence = ConfidenceResult(score=20, category="baja", factors={})
+    confidence = ConfidenceResult(score=20, category="low", factors={})
     title_risk = TitleRiskResult(
         risk_score=0.0, flagged_listings=0, flagged_pct=0.0,
         semantic_flags={}, manual_review_required=False,
@@ -165,12 +165,12 @@ def test_validate_buy_degrades_to_watch_on_low_confidence():
     profit = compute_profit(150.0, 50.0, "ebay")
     rec, warnings = _validate_buy("buy", confidence, title_risk, cleaned, profit)
     assert rec == "watch"
-    assert any("Confianza" in w for w in warnings)
+    assert any("confidence" in w.lower() for w in warnings)
 
 
 def test_validate_buy_degrades_to_buy_small_on_few_comps():
     """buy con < 5 comps → buy_small."""
-    confidence = ConfidenceResult(score=60, category="media", factors={})
+    confidence = ConfidenceResult(score=60, category="medium", factors={})
     title_risk = TitleRiskResult(
         risk_score=0.0, flagged_listings=0, flagged_pct=0.0,
         semantic_flags={}, manual_review_required=False,
@@ -184,7 +184,7 @@ def test_validate_buy_degrades_to_buy_small_on_few_comps():
 
 def test_validate_buy_degrades_to_buy_small_on_title_risk():
     """buy con title_risk alto → buy_small."""
-    confidence = ConfidenceResult(score=60, category="media", factors={})
+    confidence = ConfidenceResult(score=60, category="medium", factors={})
     title_risk = TitleRiskResult(
         risk_score=0.5, flagged_listings=5, flagged_pct=0.5,
         semantic_flags={"box_only": 5}, manual_review_required=True,
@@ -199,7 +199,7 @@ def test_validate_buy_degrades_to_buy_small_on_title_risk():
 
 def test_validate_buy_negative_profit_to_pass():
     """buy con profit negativo → pass."""
-    confidence = ConfidenceResult(score=60, category="media", factors={})
+    confidence = ConfidenceResult(score=60, category="medium", factors={})
     title_risk = TitleRiskResult(
         risk_score=0.0, flagged_listings=0, flagged_pct=0.0,
         semantic_flags={}, manual_review_required=False,
@@ -216,7 +216,7 @@ def test_validate_buy_negative_profit_to_pass():
 def test_validate_buy_headroom_negative_degrades_to_watch():
     """buy_small cuando cost > max_buy → watch con warning de negociación."""
     from app.services.engines.max_buy_price import MaxBuyResult
-    confidence = ConfidenceResult(score=60, category="media", factors={})
+    confidence = ConfidenceResult(score=60, category="medium", factors={})
     title_risk = TitleRiskResult(
         risk_score=0.0, flagged_listings=0, flagged_pct=0.0,
         semantic_flags={}, manual_review_required=False,
@@ -230,14 +230,14 @@ def test_validate_buy_headroom_negative_degrades_to_watch():
         max_buy=max_buy, cost_price=70.0,
     )
     assert rec == "watch"
-    assert any("excede el máximo" in w for w in warnings)
+    assert any("exceeds the recommended max" in w for w in warnings)
     assert any("$63.00" in w for w in warnings)
 
 
 def test_validate_buy_headroom_positive_no_degrade():
     """cost < max_buy → no degrada por headroom."""
     from app.services.engines.max_buy_price import MaxBuyResult
-    confidence = ConfidenceResult(score=60, category="media", factors={})
+    confidence = ConfidenceResult(score=60, category="medium", factors={})
     title_risk = TitleRiskResult(
         risk_score=0.0, flagged_listings=0, flagged_pct=0.0,
         semantic_flags={}, manual_review_required=False,
@@ -251,14 +251,14 @@ def test_validate_buy_headroom_positive_no_degrade():
         max_buy=max_buy, cost_price=50.0,
     )
     assert rec == "buy"
-    assert not any("excede" in w for w in warnings)
+    assert not any("exceeds" in w for w in warnings)
 
 
 # --- Confidence < 50 threshold ---
 
 def test_validate_buy_confidence_49_degrades_to_watch():
     """confidence 49 → watch (no buy_small)."""
-    confidence = ConfidenceResult(score=49, category="media", factors={})
+    confidence = ConfidenceResult(score=49, category="medium", factors={})
     title_risk = TitleRiskResult(
         risk_score=0.0, flagged_listings=0, flagged_pct=0.0,
         semantic_flags={}, manual_review_required=False,
@@ -272,7 +272,7 @@ def test_validate_buy_confidence_49_degrades_to_watch():
 
 def test_validate_buy_confidence_50_no_degrade():
     """confidence 50 → no degrada por confianza."""
-    confidence = ConfidenceResult(score=50, category="media", factors={})
+    confidence = ConfidenceResult(score=50, category="medium", factors={})
     title_risk = TitleRiskResult(
         risk_score=0.0, flagged_listings=0, flagged_pct=0.0,
         semantic_flags={}, manual_review_required=False,
@@ -282,14 +282,14 @@ def test_validate_buy_confidence_50_no_degrade():
     profit = compute_profit(150.0, 50.0, "ebay")
     rec, warnings = _validate_buy("buy", confidence, title_risk, cleaned, profit)
     assert rec == "buy"
-    assert not any("Confianza" in w for w in warnings)
+    assert not any("confidence" in w.lower() for w in warnings)
 
 
 # --- Distribution bimodal warning ---
 
 def test_validate_buy_bimodal_adds_warning():
     """Distribución bimodal agrega warning."""
-    confidence = ConfidenceResult(score=60, category="media", factors={})
+    confidence = ConfidenceResult(score=60, category="medium", factors={})
     title_risk = TitleRiskResult(
         risk_score=0.0, flagged_listings=0, flagged_pct=0.0,
         semantic_flags={}, manual_review_required=False,
@@ -301,7 +301,7 @@ def test_validate_buy_bimodal_adds_warning():
         "buy", confidence, title_risk, cleaned, profit,
         distribution_shape="bimodal",
     )
-    assert any("bimodal" in w for w in warnings)
+    assert any("bimodal" in w.lower() for w in warnings)
 
 
 # --- Distribution shape detection ---

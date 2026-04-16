@@ -654,7 +654,7 @@ class TestAIExplanationComparison:
             max_by_profit: float = 40.0
             max_by_roi: float = 38.0
             score: int = 70
-            category: str = "medio"
+            category: str = "medium"
             sales_per_day: float = 1.0
             estimated_days_to_sell: float = 5.0
             market_sale_interval_days: float = 1.0
@@ -666,7 +666,7 @@ class TestAIExplanationComparison:
             price_trend: float = 5.0
             coverage_ratio: float = 0.8
             burstiness: float = 0.1
-            confidence: str = "media"
+            confidence: str = "medium"
             recommended_format: str = "fixed_price"
             reasoning: str = "test"
             auction_signal: float = 0.2

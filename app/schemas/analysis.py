@@ -194,8 +194,8 @@ class MarketplaceAnalysis(BaseModel):
 
 class MarketEventOut(BaseModel):
     event: str
-    impact: str       # positivo|negativo|neutro
-    relevance: str    # alta|media|baja
+    impact: str       # positive|negative|neutral
+    relevance: str    # high|medium|low
 
 
 class MarketIntelligenceOut(BaseModel):
@@ -204,8 +204,8 @@ class MarketIntelligenceOut(BaseModel):
     seasonal_factor: float     # -1.0 a 1.0
     market_events: list[MarketEventOut]
     timing_recommendation: str # buy_now|wait|sell_fast|hold
-    intelligence_summary: str  # 2-3 oraciones en español
-    confidence: str            # alta|media|baja
+    intelligence_summary: str  # 2-3 sentences in English
+    confidence: str            # high|medium|low
     search_source: str         # brave_search|llm_knowledge
 
 
@@ -235,8 +235,8 @@ class AnalysisSummary(BaseModel):
     buy_box: BuyBox
     sale_plan: SalePlan
     returns: Returns
-    risk: str                    # bajo|medio|alto
-    confidence: str              # alta|media_alta|media|baja
+    risk: str                    # low|medium|high
+    confidence: str              # high|medium_high|medium|low
     warnings: list[str] = []     # alertas del validador
 
 

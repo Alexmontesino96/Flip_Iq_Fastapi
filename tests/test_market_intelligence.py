@@ -24,12 +24,12 @@ def _valid_llm_response() -> dict:
         "depreciation_risk": 45,
         "seasonal_factor": 0.3,
         "market_events": [
-            {"event": "Nuevo modelo anunciado", "impact": "negativo", "relevance": "alta"},
-            {"event": "Black Friday próximo", "impact": "positivo", "relevance": "media"},
+            {"event": "New model announced", "impact": "negative", "relevance": "high"},
+            {"event": "Black Friday upcoming", "impact": "positive", "relevance": "medium"},
         ],
         "timing_recommendation": "buy_now",
-        "intelligence_summary": "Producto estable con demanda consistente. Buen momento para comprar.",
-        "confidence": "alta",
+        "intelligence_summary": "Stable product with consistent demand. Good time to buy.",
+        "confidence": "high",
     }
 
 
@@ -48,10 +48,10 @@ class TestParseIntelligenceResult:
         assert result.depreciation_risk == 45
         assert result.seasonal_factor == 0.3
         assert len(result.market_events) == 2
-        assert result.market_events[0].event == "Nuevo modelo anunciado"
-        assert result.market_events[0].impact == "negativo"
+        assert result.market_events[0].event == "New model announced"
+        assert result.market_events[0].impact == "negative"
         assert result.timing_recommendation == "buy_now"
-        assert result.confidence == "alta"
+        assert result.confidence == "high"
         assert result.search_source == "brave_search"
 
     def test_invalid_lifecycle_defaults_to_mature(self):
@@ -85,7 +85,7 @@ class TestParseIntelligenceResult:
     def test_max_3_events(self):
         data = _valid_llm_response()
         data["market_events"] = [
-            {"event": f"Event {i}", "impact": "neutro", "relevance": "baja"}
+            {"event": f"Event {i}", "impact": "neutral", "relevance": "low"}
             for i in range(6)
         ]
         result = _parse_intelligence_result(data, "llm_knowledge")
@@ -105,7 +105,7 @@ class TestParseIntelligenceResult:
         assert result.market_events == []
         assert result.timing_recommendation == "hold"
         assert result.intelligence_summary == ""
-        assert result.confidence == "media"
+        assert result.confidence == "medium"
         assert result.search_source == "llm_knowledge"
 
 

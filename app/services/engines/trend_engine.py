@@ -17,21 +17,21 @@ class TrendResult:
     price_trend: float       # % cambio en precio medio
     coverage_ratio: float    # días con ventas / lookback_days
     burstiness: float        # max_daily / total (0=uniforme, 1=todo en 1 día)
-    confidence: str          # alta|media|media_baja|baja
-    category: str            # subiendo|estable|bajando
+    confidence: str          # high|medium|medium_low|low
+    category: str            # rising|stable|declining|no_data
 
 
 def _trend_confidence(coverage_ratio: float, recent_count: int, prev_count: int) -> str:
     """Evalúa qué tan confiable es la tendencia detectada."""
     # Necesitamos data en ambos periodos y buena cobertura
     if coverage_ratio >= 0.5 and recent_count >= 5 and prev_count >= 5:
-        return "alta"
+        return "high"
     elif coverage_ratio >= 0.35 and recent_count >= 3 and prev_count >= 3:
-        return "media"
+        return "medium"
     elif coverage_ratio >= 0.2 and (recent_count >= 2 or prev_count >= 2):
-        return "media_baja"
+        return "medium_low"
     else:
-        return "baja"
+        return "low"
 
 
 def compute_trend(cleaned: CleanedComps) -> TrendResult:
@@ -42,8 +42,8 @@ def compute_trend(cleaned: CleanedComps) -> TrendResult:
             price_trend=0.0,
             coverage_ratio=0.0,
             burstiness=0.0,
-            confidence="baja",
-            category="sin_datos",
+            confidence="low",
+            category="no_data",
         )
 
     # Agrupar ventas por día
@@ -65,8 +65,8 @@ def compute_trend(cleaned: CleanedComps) -> TrendResult:
             price_trend=0.0,
             coverage_ratio=0.0,
             burstiness=0.0,
-            confidence="baja",
-            category="estable",
+            confidence="low",
+            category="stable",
         )
 
     # Dividir en últimos 7 días vs 7 días previos (comparar como strings YYYY-MM-DD)
@@ -115,11 +115,11 @@ def compute_trend(cleaned: CleanedComps) -> TrendResult:
 
     # Categoría
     if demand_trend > 15:
-        category = "subiendo"
+        category = "rising"
     elif demand_trend < -15:
-        category = "bajando"
+        category = "declining"
     else:
-        category = "estable"
+        category = "stable"
 
     return TrendResult(
         demand_trend=round(demand_trend, 2),

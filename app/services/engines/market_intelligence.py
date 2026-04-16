@@ -17,16 +17,16 @@ logger = logging.getLogger(__name__)
 
 VALID_LIFECYCLES = {"new_release", "mature", "end_of_life", "discontinued"}
 VALID_TIMINGS = {"buy_now", "wait", "sell_fast", "hold"}
-VALID_IMPACTS = {"positivo", "negativo", "neutro"}
-VALID_RELEVANCES = {"alta", "media", "baja"}
-VALID_CONFIDENCES = {"alta", "media", "baja"}
+VALID_IMPACTS = {"positive", "negative", "neutral"}
+VALID_RELEVANCES = {"high", "medium", "low"}
+VALID_CONFIDENCES = {"high", "medium", "low"}
 
 
 @dataclass
 class MarketEvent:
     event: str
-    impact: str       # positivo|negativo|neutro
-    relevance: str    # alta|media|baja
+    impact: str       # positive|negative|neutral
+    relevance: str    # high|medium|low
 
 
 @dataclass
@@ -37,32 +37,32 @@ class MarketIntelligenceResult:
     market_events: list[MarketEvent] = field(default_factory=list)
     timing_recommendation: str = "hold"  # buy_now|wait|sell_fast|hold
     intelligence_summary: str = ""
-    confidence: str = "media"  # alta|media|baja
+    confidence: str = "medium"  # high|medium|low
     search_source: str = "llm_knowledge"  # brave_search|llm_knowledge
 
 
-SYSTEM_PROMPT = """Eres un analista de mercado experto en productos de consumo y reselling.
-Analiza el producto y contexto web proporcionado. Responde SOLO con un JSON válido (sin markdown, sin ```).
+SYSTEM_PROMPT = """You are a market analyst expert in consumer products and reselling.
+Analyze the product and provided web context. Respond ONLY with valid JSON (no markdown, no ```).
 
-Estructura exacta del JSON:
+Exact JSON structure:
 {
   "product_lifecycle": "new_release|mature|end_of_life|discontinued",
   "depreciation_risk": 0-100,
-  "seasonal_factor": -1.0 a 1.0,
-  "market_events": [{"event": "descripción corta", "impact": "positivo|negativo|neutro", "relevance": "alta|media|baja"}],
+  "seasonal_factor": -1.0 to 1.0,
+  "market_events": [{"event": "short description", "impact": "positive|negative|neutral", "relevance": "high|medium|low"}],
   "timing_recommendation": "buy_now|wait|sell_fast|hold",
-  "intelligence_summary": "2-3 oraciones en español sobre el mercado actual del producto",
-  "confidence": "alta|media|baja"
+  "intelligence_summary": "2-3 sentences in English about the current market for this product",
+  "confidence": "high|medium|low"
 }
 
-Reglas:
-- product_lifecycle: "new_release" si < 6 meses, "mature" si estable, "end_of_life" si está siendo reemplazado, "discontinued" si ya no se fabrica
-- depreciation_risk: 0=sin depreciación (coleccionable), 100=pierde valor rápidamente (tech obsoleta)
-- seasonal_factor: -1.0=peor época para vender, 0=sin efecto estacional, 1.0=mejor época (ej: navidad para juguetes)
-- market_events: máximo 3 eventos relevantes actuales que afectan precio/demanda
-- timing_recommendation: "buy_now" si buen momento, "wait" si va a bajar, "sell_fast" si depreciación rápida, "hold" si estable
-- intelligence_summary: en español, práctico para un revendedor
-- confidence: "alta" si hay datos claros, "media" si razonable, "baja" si especulativo"""
+Rules:
+- product_lifecycle: "new_release" if < 6 months old, "mature" if stable, "end_of_life" if being replaced, "discontinued" if no longer manufactured
+- depreciation_risk: 0=no depreciation (collectible), 100=loses value quickly (obsolete tech)
+- seasonal_factor: -1.0=worst time to sell, 0=no seasonal effect, 1.0=best time (e.g. Christmas for toys)
+- market_events: max 3 current relevant events affecting price/demand
+- timing_recommendation: "buy_now" if good time, "wait" if price will drop, "sell_fast" if rapid depreciation, "hold" if stable
+- intelligence_summary: in English, practical for a reseller
+- confidence: "high" if clear data, "medium" if reasonable, "low" if speculative"""
 
 USER_TEMPLATE = """Producto: {keyword}
 Marketplace: {marketplace}
@@ -136,12 +136,12 @@ def _parse_intelligence_result(
     for ev in raw_events[:3]:
         if not isinstance(ev, dict) or not ev.get("event"):
             continue
-        impact = ev.get("impact", "neutro")
+        impact = ev.get("impact", "neutral")
         if impact not in VALID_IMPACTS:
-            impact = "neutro"
-        relevance = ev.get("relevance", "media")
+            impact = "neutral"
+        relevance = ev.get("relevance", "medium")
         if relevance not in VALID_RELEVANCES:
-            relevance = "media"
+            relevance = "medium"
         events.append(MarketEvent(
             event=str(ev["event"])[:200],
             impact=impact,
@@ -157,9 +157,9 @@ def _parse_intelligence_result(
     summary = str(data.get("intelligence_summary", ""))[:500]
 
     # Confidence
-    confidence = data.get("confidence", "media")
+    confidence = data.get("confidence", "medium")
     if confidence not in VALID_CONFIDENCES:
-        confidence = "media"
+        confidence = "medium"
 
     return MarketIntelligenceResult(
         product_lifecycle=lifecycle,
@@ -203,7 +203,7 @@ async def compute_market_intelligence(
 
         if search_results:
             search_source = "brave_search"
-            web_lines = ["Contexto web reciente:"]
+            web_lines = ["Recent web context:"]
             for r in search_results:
                 web_lines.append(f"- {r['title']}: {r['description']}")
             web_context = "\n".join(web_lines)

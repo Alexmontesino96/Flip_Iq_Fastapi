@@ -17,7 +17,7 @@ from app.services.marketplace.base import CleanedComps, CompsResult
 @dataclass
 class ConfidenceResult:
     score: int           # 0-100
-    category: str        # alta|media_alta|media|baja
+    category: str        # high|medium_high|medium|low
     factors: dict[str, float]
 
 
@@ -37,7 +37,7 @@ def compute_confidence(
     if cleaned.clean_total == 0:
         return ConfidenceResult(
             score=0,
-            category="baja",
+            category="low",
             factors={"no_data": 1.0},
         )
 
@@ -94,13 +94,13 @@ def compute_confidence(
 
     # 4 niveles de confianza
     if score >= 85:
-        category = "alta"
+        category = "high"
     elif score >= 70:
-        category = "media_alta"
+        category = "medium_high"
     elif score >= 50:
-        category = "media"
+        category = "medium"
     else:
-        category = "baja"
+        category = "low"
 
     return ConfidenceResult(
         score=score,

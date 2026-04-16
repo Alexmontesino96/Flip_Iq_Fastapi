@@ -81,12 +81,12 @@ class TestFullPipeline:
         # Motor E
         velocity = compute_velocity(cleaned)
         assert 0 <= velocity.score <= 100
-        assert velocity.category in ("muy_rapido", "rapido", "saludable", "lento", "muy_lento")
+        assert velocity.category in ("very_fast", "fast", "healthy", "slow", "very_slow")
 
         # Motor F
         risk = compute_risk(cleaned, raw)
         assert 0 <= risk.score <= 100
-        assert risk.category in ("bajo", "medio", "alto")
+        assert risk.category in ("low", "medium", "high")
 
         # Motor G
         confidence = compute_confidence(cleaned, raw)
@@ -103,7 +103,7 @@ class TestFullPipeline:
 
         # Motor J
         trend = compute_trend(cleaned)
-        assert trend.category in ("subiendo", "estable", "bajando")
+        assert trend.category in ("rising", "stable", "declining")
 
         # Motor K
         listing = compute_listing_strategy(cleaned, velocity, risk)
@@ -136,10 +136,10 @@ class TestFullPipeline:
 
         competition = compute_competition(cleaned)
         assert competition.unique_sellers == 0
-        assert competition.category == "sin_datos"
+        assert competition.category == "no_data"
 
         trend = compute_trend(cleaned)
-        assert trend.category == "sin_datos"
+        assert trend.category == "no_data"
 
     def test_pipeline_with_few_comps(self):
         """Verifica comportamiento con pocos comps (3)."""
@@ -164,13 +164,13 @@ class TestVelocityEngine:
         cleaned = CleanedComps(sales_per_day=0)
         result = compute_velocity(cleaned)
         assert result.score == 0
-        assert result.category == "muy_lento"
+        assert result.category == "very_slow"
 
     def test_high_velocity(self):
         cleaned = CleanedComps(sales_per_day=2.0, clean_total=60, days_of_data=30)
         result = compute_velocity(cleaned)
         assert result.score >= 80
-        assert result.category == "muy_rapido"
+        assert result.category == "very_fast"
 
     def test_logarithmic_formula(self):
         cleaned = CleanedComps(sales_per_day=1.0, clean_total=30, days_of_data=30)
@@ -220,7 +220,7 @@ class TestRiskEngine:
         raw = CompsResult(total_sold=22)
         result = compute_risk(cleaned, raw)
         assert result.score >= 60  # Bajo riesgo
-        assert result.category in ("bajo", "medio")
+        assert result.category in ("low", "medium")
 
     def test_volatile_market_high_risk(self):
         """Mercado volátil = alto riesgo."""
@@ -232,7 +232,7 @@ class TestRiskEngine:
         raw = CompsResult(total_sold=15)
         result = compute_risk(cleaned, raw)
         assert result.score < 50
-        assert result.category in ("medio", "alto")
+        assert result.category in ("medium", "high")
 
 
 class TestCompetitionEngine:
@@ -246,7 +246,7 @@ class TestCompetitionEngine:
         cleaned = CleanedComps(listings=listings, clean_total=10)
         result = compute_competition(cleaned)
         assert result.hhi == 1.0
-        assert result.category == "concentrado"
+        assert result.category == "concentrated"
 
     def test_many_sellers_low_hhi(self):
         """Muchos sellers diferentes = HHI bajo."""
@@ -258,7 +258,7 @@ class TestCompetitionEngine:
         cleaned = CleanedComps(listings=listings, clean_total=20)
         result = compute_competition(cleaned)
         assert result.hhi <= 0.15
-        assert result.category == "sano"
+        assert result.category == "healthy"
 
 
 class TestTrendEngine:
@@ -284,7 +284,7 @@ class TestTrendEngine:
         cleaned = CleanedComps(listings=listings, clean_total=11, days_of_data=30)
         result = compute_trend(cleaned)
         assert result.demand_trend > 0
-        assert result.category == "subiendo"
+        assert result.category == "rising"
 
 
 class TestSellerPremium:
@@ -372,9 +372,9 @@ class TestListingStrategy:
 
         cleaned = CleanedComps(clean_total=20, cv=0.40)
         velocity = VelocityResult(score=85, sales_per_day=2.0,
-                                  category="muy_rapido", market_sale_interval_days=0.5,
+                                  category="very_fast", market_sale_interval_days=0.5,
                                   estimated_days_to_sell=None)
-        risk = RiskResult(score=80, category="bajo", factors={})
+        risk = RiskResult(score=80, category="low", factors={})
 
         result = compute_listing_strategy(cleaned, velocity, risk)
         assert result.auction_signal > result.fixed_price_signal
@@ -386,9 +386,9 @@ class TestListingStrategy:
 
         cleaned = CleanedComps(clean_total=25, cv=0.15)
         velocity = VelocityResult(score=50, sales_per_day=0.5,
-                                  category="saludable", market_sale_interval_days=2.0,
+                                  category="healthy", market_sale_interval_days=2.0,
                                   estimated_days_to_sell=None)
-        risk = RiskResult(score=75, category="bajo", factors={})
+        risk = RiskResult(score=75, category="low", factors={})
 
         result = compute_listing_strategy(cleaned, velocity, risk)
         assert result.recommended_format == "fixed_price"
@@ -401,12 +401,12 @@ class TestListingStrategy:
 
         cleaned = CleanedComps(clean_total=5, cv=0.15)
         velocity = VelocityResult(score=50, sales_per_day=0.5,
-                                  category="saludable", market_sale_interval_days=2.0,
+                                  category="healthy", market_sale_interval_days=2.0,
                                   estimated_days_to_sell=None)
-        risk = RiskResult(score=75, category="bajo", factors={})
+        risk = RiskResult(score=75, category="low", factors={})
 
         result = compute_listing_strategy(cleaned, velocity, risk)
-        assert "muestra limitada" in result.reasoning
+        assert "limited sample" in result.reasoning
         assert "5 comps" in result.reasoning
 
     def test_many_comps_no_qualifier(self):
@@ -417,12 +417,12 @@ class TestListingStrategy:
 
         cleaned = CleanedComps(clean_total=15, cv=0.15)
         velocity = VelocityResult(score=50, sales_per_day=0.5,
-                                  category="saludable", market_sale_interval_days=2.0,
+                                  category="healthy", market_sale_interval_days=2.0,
                                   estimated_days_to_sell=2.0)
-        risk = RiskResult(score=75, category="bajo", factors={})
+        risk = RiskResult(score=75, category="low", factors={})
 
         result = compute_listing_strategy(cleaned, velocity, risk)
-        assert "muestra limitada" not in result.reasoning
+        assert "limited sample" not in result.reasoning
 
     def test_best_offer_has_suggested_min_offer(self):
         """best_offer con quick_price → suggested_min_offer = quick_price."""
@@ -432,9 +432,9 @@ class TestListingStrategy:
 
         cleaned = CleanedComps(clean_total=5, cv=0.30)
         velocity = VelocityResult(score=15, sales_per_day=0.05,
-                                  category="muy_lento", market_sale_interval_days=20.0,
+                                  category="very_slow", market_sale_interval_days=20.0,
                                   estimated_days_to_sell=20.0)
-        risk = RiskResult(score=30, category="alto", factors={})
+        risk = RiskResult(score=30, category="high", factors={})
 
         result = compute_listing_strategy(cleaned, velocity, risk, quick_price=85.50)
         assert result.recommended_format == "best_offer"
@@ -448,9 +448,9 @@ class TestListingStrategy:
 
         cleaned = CleanedComps(clean_total=25, cv=0.15)
         velocity = VelocityResult(score=50, sales_per_day=0.5,
-                                  category="saludable", market_sale_interval_days=2.0,
+                                  category="healthy", market_sale_interval_days=2.0,
                                   estimated_days_to_sell=2.0)
-        risk = RiskResult(score=75, category="bajo", factors={})
+        risk = RiskResult(score=75, category="low", factors={})
 
         result = compute_listing_strategy(cleaned, velocity, risk, quick_price=85.50)
         assert result.recommended_format == "fixed_price"
