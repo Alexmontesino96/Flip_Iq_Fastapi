@@ -82,6 +82,8 @@ def _normalize_price(listing: MarketplaceListing) -> float:
 
 _MODEL_CONTEXT_PREFIXES = frozenset({
     "size", "sz", "us", "uk", "eu", "pack", "lot", "set", "x", "qty", "quantity", "count",
+    "mens", "womens", "men", "women", "gs", "youth", "grade", "jr", "junior",
+    "kids", "toddler", "boys", "girls", "infant",
 })
 
 _MODEL_NUMBER_RE = re.compile(r"(?<!\$)\b([a-z][a-z0-9]*[-]?[a-z]*)\s*(\d+(?:\.\d+)?)\b")

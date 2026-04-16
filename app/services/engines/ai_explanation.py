@@ -5,6 +5,7 @@ Fallback: texto genérico basado en los scores si la API falla.
 """
 
 import logging
+import re
 
 from app.config import settings
 
@@ -14,12 +15,14 @@ SYSTEM_PROMPT = """You are an expert assistant in product reselling/flipping.
 Your job is to explain market analysis results to resellers.
 Be direct, practical and use simple language. Respond in English.
 
+FORMATTING: Write plain text only. Do NOT use markdown, asterisks, bold, headers, bullet points, or any special formatting. Just write natural paragraphs separated by blank lines.
+
 You MUST write exactly 4 paragraphs with this structure:
 
-1. **Market Overview** — Median sale price, number of comps analyzed, sell-through rate/velocity, and what they tell us about demand.
-2. **Profit Analysis** — Purchase cost, expected sale price, fees, net profit, ROI. State whether the margin is healthy, thin, or negative.
-3. **Risk Factors** — Identify the weakest score in the analysis and explain why it matters. Mention any warnings about competition, price volatility, or low confidence.
-4. **Recommendation** — Clear action: buy (how many units), watch (what trigger to wait for), or pass (why). Include timing if relevant.
+1. Market Overview — Median sale price, number of comps analyzed, sell-through rate/velocity, and what they tell us about demand.
+2. Profit Analysis — Purchase cost, expected sale price, fees, net profit, ROI. State whether the margin is healthy, thin, or negative.
+3. Risk Factors — Identify the weakest score in the analysis and explain why it matters. Mention any warnings about competition, price volatility, or low confidence.
+4. Recommendation — Clear action: buy (how many units), watch (what trigger to wait for), or pass (why). Include timing if relevant.
 
 Important rules:
 - Scores are 0-100 where higher = better. A risk score of 74 = stable market (low risk).
@@ -64,6 +67,22 @@ MARKET:
 DECISION: {recommendation}
 
 Give your analysis in English. Be specific with numbers."""
+
+
+def _strip_markdown(text: str) -> str:
+    """Elimina markdown residual que el LLM pueda incluir a pesar de la instrucción."""
+    if not text:
+        return text
+    # Remove bold/italic: **text**, *text*, __text__, _text_
+    text = re.sub(r"\*{1,2}(.+?)\*{1,2}", r"\1", text)
+    text = re.sub(r"_{1,2}(.+?)_{1,2}", r"\1", text)
+    # Remove headers: ## Header → Header
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+    # Remove bullet points: - item → item, * item → item
+    text = re.sub(r"^[\-\*]\s+", "", text, flags=re.MULTILINE)
+    # Remove numbered markdown lists with dots: 1. item → item (but keep "1." mid-sentence)
+    text = re.sub(r"^\d+\.\s+", "", text, flags=re.MULTILINE)
+    return text.strip()
 
 
 async def generate_explanation(
@@ -143,7 +162,7 @@ async def generate_explanation(
             timeout=15,
         )
 
-        return response.choices[0].message.content
+        return _strip_markdown(response.choices[0].message.content)
 
     except Exception as e:
         # Auto-fallback a OpenAI si Gemini falla
@@ -163,7 +182,7 @@ async def generate_explanation(
                         temperature=0.7,
                         timeout=15,
                     )
-                    return response.choices[0].message.content
+                    return _strip_markdown(response.choices[0].message.content)
                 except Exception as e2:
                     logger.warning("OpenAI fallback also failed: %s", e2)
         logger.warning("AI explanation failed: %s", e)

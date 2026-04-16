@@ -55,6 +55,7 @@ from app.core.brands import detect_brand
 from app.services.engines.ai_explanation import generate_explanation
 from app.services.engines.market_intelligence import compute_market_intelligence
 from app.services.engines.comp_cleaner import clean_comps
+from app.services.engines.comp_relevance import filter_comps_by_relevance
 from app.services.engines.product_categorizer import categorize_product
 from app.services.engines.title_enricher import enrich_listings
 from app.services.engines.competition_engine import compute_competition
@@ -636,6 +637,14 @@ async def run_analysis(
     if ebay_raw.listings:
         ebay_raw = await enrich_listings(ebay_raw, keyword=search_keyword or barcode)
         ebay_enriched = True
+
+    # -----------------------------------------------------------------------
+    # 2b. LLM relevance filter (después de enrich, antes de pipeline)
+    # -----------------------------------------------------------------------
+    if ebay_raw.listings and search_keyword:
+        ebay_raw = await filter_comps_by_relevance(ebay_raw, search_keyword)
+    if amazon_raw and amazon_raw.listings and search_keyword:
+        amazon_raw = await filter_comps_by_relevance(amazon_raw, search_keyword)
 
     # -----------------------------------------------------------------------
     # 3. Ejecutar pipeline de motores en AMBOS marketplaces

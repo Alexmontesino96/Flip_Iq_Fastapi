@@ -439,6 +439,36 @@ class TestModelNumberPenalty:
         assert score > 0.40
 
 
+class TestContextPrefixes:
+    """Verifica que palabras de talla/género no se extraigan como modelo."""
+
+    def test_mens_not_extracted(self):
+        result = _extract_model_numbers("Nike Vomero 5 Mens 10")
+        assert "mens" not in result
+
+    def test_womens_not_extracted(self):
+        result = _extract_model_numbers("Nike Vomero 5 Womens 8")
+        assert "womens" not in result
+
+    def test_gs_not_extracted(self):
+        result = _extract_model_numbers("Nike Vomero 5 GS 5Y")
+        assert "gs" not in result
+
+    def test_youth_not_extracted(self):
+        result = _extract_model_numbers("Nike Dunk Low Youth 4")
+        assert "youth" not in result
+
+    def test_toddler_not_extracted(self):
+        result = _extract_model_numbers("Jordan 1 Toddler 8C")
+        assert "toddler" not in result
+
+    def test_model_still_extracted_with_prefixes(self):
+        """Vomero 5 sigue extrayéndose correctamente."""
+        result = _extract_model_numbers("Nike Vomero 5 GS 5Y")
+        assert "vomero" in result
+        assert result["vomero"] == "5"
+
+
 class TestCleanCompsModelFiltering:
     def test_filters_wrong_model_numbers(self):
         """3 listings Vomero 6 + 2 Vomero 5 → solo Vomero 6 sobrevive."""
