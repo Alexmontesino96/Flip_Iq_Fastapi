@@ -24,10 +24,9 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6379/0"
 
-    # Auth
-    secret_key: str = "change-me-to-a-random-secret"
-    algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60
+    # Supabase Auth
+    supabase_url: str = ""
+    supabase_jwt_secret: str = ""
 
     # Rate limiting
     rate_limit_per_minute: int = 60
@@ -79,10 +78,10 @@ class Settings(BaseSettings):
 
     def validate_production(self) -> None:
         if self.environment == "production":
-            if self.secret_key == "change-me-to-a-random-secret":
+            if not self.supabase_jwt_secret:
                 raise ValueError(
-                    "SECRET_KEY no puede ser el valor por defecto en produccion. "
-                    "Genera uno con: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+                    "SUPABASE_JWT_SECRET is required in production. "
+                    "Find it in Supabase Dashboard → Settings → API → JWT Secret."
                 )
             if self.debug:
                 warnings.warn("DEBUG=True en produccion. Considera desactivarlo.", stacklevel=2)
