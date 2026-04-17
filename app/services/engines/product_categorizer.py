@@ -46,8 +46,9 @@ async def categorize_product(keyword: str) -> CategoryResult | None:
             resp = await client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=100,
+                max_tokens=1024,
                 temperature=0.0,
+                timeout=15,
             )
             text = (resp.choices[0].message.content or "").strip()
             # Limpiar markdown fences si las hay

@@ -18,8 +18,8 @@ from app.services.marketplace.base import CompsResult
 
 logger = logging.getLogger(__name__)
 
-# Batches de 25 títulos: Flash-Lite es rápido, batches grandes reducen roundtrips.
-_LLM_BATCH_SIZE = 25
+# Batches de 10 títulos: Gemini 2.5 Flash thinking tokens necesitan margen.
+_LLM_BATCH_SIZE = 10
 # Concurrencia: 3 batches simultáneos (Flash-Lite tiene límites más altos)
 _LLM_CONCURRENCY = 3
 
@@ -211,9 +211,9 @@ async def _llm_extract_batch(
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
         ],
-        max_tokens=4096,
+        max_tokens=8192,
         temperature=0.1,
-        timeout=15,
+        timeout=30,
     )
 
     raw_text = response.choices[0].message.content.strip()

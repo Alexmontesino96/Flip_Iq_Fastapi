@@ -124,9 +124,9 @@ async def _call_llm(
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
             ],
-            max_tokens=150,
+            max_tokens=1024,
             temperature=0.0,
-            timeout=10,
+            timeout=20,
         )
     except Exception as e:
         if is_gemini_error(e):
@@ -142,9 +142,9 @@ async def _call_llm(
                         {"role": "system", "content": _SYSTEM_PROMPT},
                         {"role": "user", "content": user_content},
                     ],
-                    max_tokens=150,
+                    max_tokens=1024,
                     temperature=0.0,
-                    timeout=10,
+                    timeout=20,
                 )
             except Exception:
                 return None
