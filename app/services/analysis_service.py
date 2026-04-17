@@ -708,50 +708,21 @@ async def run_analysis(
     else:
         ebay_raw = await ebay_coro
 
-    # 1b. UPC supplement: siempre suplementar barcode con keyword search.
-    # UPC search en eBay devuelve items que abarcan meses; comp_cleaner descarta
-    # los viejos (>30 días), dejando pocos. Keyword search trae items más recientes.
+    # 1b. UPC fallback: si barcode no devolvió nada, intentar keyword.
+    # No suplementar UPC con keyword: el UPC devuelve el producto EXACTO
+    # (condición correcta, sin ruido). Keyword trae items de otras condiciones
+    # que contaminan la mediana de precio.
     upc_hit = bool(barcode and ebay_raw.listings)
-    if barcode and search_keyword and search_keyword != barcode:
-        if not ebay_raw.listings:
-            # UPC no devolvió nada → fallback completo a keyword
-            logger.info("eBay barcode sin resultados, fallback keyword='%s'", search_keyword)
-            try:
-                ebay_raw = await ebay.get_sold_comps(
-                    keyword=search_keyword, days=30, limit=ebay_limit,
-                    condition=condition, category_id=ebay_category_id,
-                )
-                upc_hit = False
-            except Exception as e:
-                logger.warning("eBay keyword fallback failed: %s", e)
-        else:
-            # UPC devolvió items → suplementar con keyword para más datos recientes
-            logger.info(
-                "Suplementando UPC (%d items) con keyword='%s'",
-                len(ebay_raw.listings), search_keyword,
+    if barcode and search_keyword and search_keyword != barcode and not ebay_raw.listings:
+        logger.info("eBay barcode sin resultados, fallback keyword='%s'", search_keyword)
+        try:
+            ebay_raw = await ebay.get_sold_comps(
+                keyword=search_keyword, days=30, limit=ebay_limit,
+                condition=condition, category_id=ebay_category_id,
             )
-            try:
-                ebay_kw = await ebay.get_sold_comps(
-                    keyword=search_keyword, days=30, limit=ebay_limit,
-                    condition=condition, category_id=ebay_category_id,
-                )
-                if ebay_kw.listings:
-                    seen_ids = {l.item_id for l in ebay_raw.listings if l.item_id}
-                    new_listings = [
-                        l for l in ebay_kw.listings
-                        if not l.item_id or l.item_id not in seen_ids
-                    ]
-                    merged = ebay_raw.listings + new_listings
-                    ebay_raw = CompsResult.from_listings(
-                        merged, marketplace="ebay", days=30,
-                    )
-                    upc_hit = False
-                    logger.info(
-                        "Merge UPC+keyword: %d total (%d new from keyword)",
-                        len(ebay_raw.listings), len(new_listings),
-                    )
-            except Exception as e:
-                logger.warning("eBay keyword supplement failed: %s", e)
+            upc_hit = False
+        except Exception as e:
+            logger.warning("eBay keyword fallback failed: %s", e)
 
     # -----------------------------------------------------------------------
     # 2. Enriquecer títulos eBay con LLM (Amazon/Keepa ya tiene datos struct.)
