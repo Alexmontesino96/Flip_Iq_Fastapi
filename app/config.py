@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     apify_token: str = ""
 
     # eBay scraper
-    ebay_data_source: str = "apify"  # "apify" (default) | "scraper" (solo local) | "rpi" (proxy residencial)
+    ebay_data_source: str = "scraper"  # "scraper" (default) | "apify" (fallback) | "rpi" (proxy residencial)
 
     # RPi Scraper Proxy (pool de proxies residenciales)
     # Comma-separated URLs: "https://rpi1.tunnel.com,https://rpi2.tunnel.com"

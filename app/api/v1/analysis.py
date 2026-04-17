@@ -1,8 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.limiter import limiter, _analysis_key
+from app.core.limiter import check_analysis_gate, increment_analysis_counter
+from app.core.redis_client import get_redis
 from app.database import get_db
 from app.models.analysis import Analysis
 from app.models.product import Product
@@ -13,12 +15,26 @@ router = APIRouter()
 
 
 @router.post("/", response_model=AnalysisResponse)
-@limiter.limit("100/hour", key_func=_analysis_key)
 async def analyze_product(
     request: Request,
+    response: Response,
     payload: AnalysisRequest,
     db: AsyncSession = Depends(get_db),
+    redis=Depends(get_redis),
 ):
+    # Soft gate check
+    gate = await check_analysis_gate(request, redis)
+    if not gate.allowed:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "reason": "free_limit_reached",
+                "tier": gate.tier,
+                "remaining": gate.remaining,
+                "reset_in_seconds": gate.reset_in,
+            },
+        )
+
     result = await run_analysis(
         db=db,
         barcode=payload.barcode,
@@ -37,6 +53,14 @@ async def analyze_product(
         mode=payload.mode,
         product_type=payload.product_type,
     )
+
+    # Increment counter after successful analysis
+    await increment_analysis_counter(request, redis, gate)
+
+    # Rate-limit headers on the normal response
+    remaining = max(gate.remaining - 1, 0)
+    response.headers["X-RateLimit-Remaining"] = str(remaining)
+    response.headers["X-RateLimit-Tier"] = gate.tier
     return result
 
 

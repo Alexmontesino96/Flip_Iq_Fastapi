@@ -38,10 +38,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("No se pudieron ejecutar migraciones: %s", e)
 
+    # Warm up Redis connection for soft gate
+    from app.core.redis_client import get_redis, close_redis
+
+    await get_redis()
+
     yield
     # Shutdown
     from app.database import engine
 
+    await close_redis()
     await engine.dispose()
 
 
