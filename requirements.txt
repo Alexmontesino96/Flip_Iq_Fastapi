@@ -24,6 +24,7 @@ httpx==0.28.1
 
 # Scraping
 beautifulsoup4>=4.12
+curl-cffi>=0.14
 
 # Utils
 python-dotenv==1.0.1
