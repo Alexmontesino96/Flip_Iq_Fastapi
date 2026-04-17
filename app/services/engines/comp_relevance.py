@@ -1,24 +1,31 @@
-"""LLM Comp Relevance Filter — Filtra comps que no son el mismo producto.
+"""Comp Relevance Filter — Filtra comps que no son el mismo producto.
 
-Usa una sola llamada LLM ultra-ligera (~750 tokens) para clasificar cada comp
-como match (1) o no-match (0) respecto al keyword buscado.
+Usa Cohere Rerank 4 Pro vía OpenRouter para scoring semántico de relevancia.
+Cada título se compara contra el keyword y recibe un score 0.0–1.0.
 
-Resuelve el problema de variantes semánticas que regex no puede distinguir:
-- GS vs Mens (Nike Vomero 5 GS vs Nike Vomero 5 Mens)
-- Accesorios vs producto completo
-- Colorways premium vs estándar
+Fallback: si OpenRouter no está disponible o falla, usa LLM (Gemini/OpenAI).
 
-Costo: ~$0.00005/análisis con Gemini 2.5 Flash.
+Costo: ~$0.0025/búsqueda con Cohere Rerank 4 Pro.
 """
 
 import json
 import logging
 
+import httpx
+
+from app.config import settings
 from app.services.marketplace.base import CompsResult
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT = """You are a product matching expert for resellers.
+_RERANK_URL = "https://openrouter.ai/api/v1/rerank"
+_RERANK_MODEL = "cohere/rerank-4-pro"
+_RERANK_THRESHOLD = 0.5  # score >= 0.5 → match (1)
+
+# Minimum comps to keep after filtering; below this we skip the filter
+_MIN_COMPS_AFTER_FILTER = 5
+
+_LLM_SYSTEM_PROMPT = """You are a product matching expert for resellers.
 Given a search keyword and numbered listing titles, classify each as 1 (same product) or 0 (different product).
 
 Rules:
@@ -30,37 +37,33 @@ Rules:
 
 Return ONLY a JSON array of 1s and 0s. Example: [1,0,1,0]"""
 
-# Minimum comps to keep after filtering; below this we skip the filter
-_MIN_COMPS_AFTER_FILTER = 5
-
 
 async def filter_comps_by_relevance(
     comps: CompsResult,
     keyword: str,
 ) -> CompsResult:
-    """Filtra comps irrelevantes usando una llamada LLM.
+    """Filtra comps irrelevantes usando Cohere Rerank (o LLM fallback).
 
     Safety nets:
-    - Si no hay LLM disponible, retorna sin filtrar.
-    - Si el LLM falla, retorna sin filtrar.
+    - Si no hay API disponible, retorna sin filtrar.
+    - Si la API falla, intenta fallback LLM, sino retorna sin filtrar.
     - Si quedan < _MIN_COMPS_AFTER_FILTER después del filtro, no filtra.
-    - Si el array de respuesta no tiene el tamaño correcto, no filtra.
     """
     if not comps.listings or not keyword:
         return comps
 
-    from app.core.llm import disable_gemini, get_llm_client, has_llm, is_gemini_error
-
-    if not has_llm():
-        return comps
-
     titles = [l.title or "" for l in comps.listings]
 
-    try:
-        verdicts = await _call_llm(titles, keyword)
-    except Exception as e:
-        logger.warning("Comp relevance filter failed, skipping: %s", e)
-        return comps
+    # Intentar rerank primero, luego fallback a LLM
+    verdicts = await _call_rerank(titles, keyword)
+    used_rerank = verdicts is not None
+
+    if verdicts is None:
+        try:
+            verdicts = await _call_llm(titles, keyword)
+        except Exception as e:
+            logger.warning("Comp relevance filter failed (both rerank and LLM), skipping: %s", e)
+            return comps
 
     if verdicts is None:
         return comps
@@ -68,7 +71,7 @@ async def filter_comps_by_relevance(
     # Validate array length
     if len(verdicts) != len(comps.listings):
         logger.warning(
-            "Relevance filter: LLM returned %d verdicts for %d titles, skipping",
+            "Relevance filter: got %d verdicts for %d titles, skipping",
             len(verdicts), len(comps.listings),
         )
         return comps
@@ -90,25 +93,81 @@ async def filter_comps_by_relevance(
 
     if removed > 0:
         logger.info(
-            "Relevance filter: removed %d/%d comps for '%s'",
+            "Relevance filter (%s): removed %d/%d comps for '%s'",
+            "rerank" if used_rerank else "llm",
             removed, len(comps.listings), keyword,
         )
-        # Rebuild CompsResult with filtered listings
         comps.listings = filtered
         comps.total_sold = len(filtered)
 
+    # Mark as reranked if Cohere did the filtering
+    if used_rerank:
+        comps.reranked = True
+
     return comps
+
+
+async def _call_rerank(
+    titles: list[str],
+    keyword: str,
+) -> list[int] | None:
+    """Llama a Cohere Rerank 4 Pro vía OpenRouter.
+
+    Retorna lista de 1/0 basada en threshold, o None si falla.
+    """
+    api_key = settings.openrouter_api_key
+    if not api_key:
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(
+                _RERANK_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": _RERANK_MODEL,
+                    "query": keyword,
+                    "documents": titles,
+                    "top_n": len(titles),
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        logger.warning("Rerank API failed, falling back to LLM: %s", e)
+        return None
+
+    results = data.get("results")
+    if not results or not isinstance(results, list):
+        logger.warning("Rerank API returned unexpected format: %s", str(data)[:200])
+        return None
+
+    # Build verdicts array indexed by original position
+    verdicts = [0] * len(titles)
+    for item in results:
+        idx = item.get("index")
+        score = item.get("relevance_score", 0.0)
+        if idx is not None and 0 <= idx < len(titles):
+            verdicts[idx] = 1 if score >= _RERANK_THRESHOLD else 0
+
+    return verdicts
 
 
 async def _call_llm(
     titles: list[str],
     keyword: str,
 ) -> list[int] | None:
-    """Hace la llamada LLM y parsea la respuesta.
+    """Fallback: hace la llamada LLM y parsea la respuesta.
 
     Retorna lista de 1/0 o None si falla.
     """
-    from app.core.llm import disable_gemini, get_llm_client, is_gemini_error
+    from app.core.llm import disable_gemini, get_llm_client, has_llm, is_gemini_error
+
+    if not has_llm():
+        return None
 
     client, model = get_llm_client()
     if client is None:
@@ -121,7 +180,7 @@ async def _call_llm(
         response = await client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": _LLM_SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
             ],
             max_tokens=150,
@@ -139,7 +198,7 @@ async def _call_llm(
                 response = await client.chat.completions.create(
                     model=model,
                     messages=[
-                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "system", "content": _LLM_SYSTEM_PROMPT},
                         {"role": "user", "content": user_content},
                     ],
                     max_tokens=150,

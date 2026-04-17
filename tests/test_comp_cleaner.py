@@ -598,3 +598,74 @@ class TestCleanCompsModelFiltering:
         assert result.relevance_filtered >= 2
         for l in result.listings:
             assert "vomero 5" not in l.title.lower()
+
+
+class TestRerankedSkipsHeuristics:
+    """Cuando raw.reranked=True, se saltan filtros heurísticos de product_type y relevance."""
+
+    def _make_comps_with_titles(self, titles_prices: list[tuple[str, float]], reranked: bool = False) -> CompsResult:
+        listings = [
+            _make_listing(price, title=title) for title, price in titles_prices
+        ]
+        result = CompsResult.from_listings(listings, marketplace="ebay", days=30)
+        result.reranked = reranked
+        return result
+
+    def test_reranked_skips_product_type_filter(self):
+        """Con reranked=True, product_type filter no se aplica."""
+        raw = self._make_comps_with_titles([
+            ("Oakley Aro3 MIPS Helmet", 100.0),
+            ("Oakley ARO3 Replacement Visor", 20.0),
+            ("Oakley Aro3 Helmet Matte Black", 95.0),
+            ("Oakley Shield Lens Clear", 15.0),
+            ("Oakley Cycling Helmet Pro", 110.0),
+        ], reranked=True)
+        result = clean_comps(raw, keyword="Oakley Aro3 Helmet", product_type="helmet")
+        # Con reranked=True, NO debe filtrar por product_type
+        assert result.product_type_filtered == 0
+
+    def test_not_reranked_applies_product_type_filter(self):
+        """Sin reranked, product_type filter se aplica normalmente."""
+        raw = self._make_comps_with_titles([
+            ("Oakley Aro3 MIPS Helmet", 100.0),
+            ("Oakley ARO3 Replacement Visor", 20.0),
+            ("Oakley Aro3 Helmet Matte Black", 95.0),
+            ("Oakley Shield Lens Clear", 15.0),
+            ("Oakley Cycling Helmet Pro", 110.0),
+        ], reranked=False)
+        result = clean_comps(raw, keyword="Oakley Aro3 Helmet", product_type="helmet")
+        assert result.product_type_filtered >= 2
+
+    def test_reranked_skips_relevance_filter(self):
+        """Con reranked=True, relevance heurístico no se aplica."""
+        specs = {"Brand": "Nike", "Model": "Vomero", "Color": "Black"}
+        listings = [
+            _make_listing(100.0, title="Nike Vomero 6 Black", brand="Nike", condition="New", item_specifics=specs),
+            _make_listing(95.0, title="Nike Vomero 6 White", brand="Nike", condition="New", item_specifics=specs),
+            _make_listing(105.0, title="Nike Vomero 6 Red", brand="Nike", condition="New", item_specifics=specs),
+            _make_listing(80.0, title="Nike Vomero 5 Blue", brand="Nike", condition="New", item_specifics=specs),
+            _make_listing(85.0, title="Nike Vomero 5 Green", brand="Nike", condition="New", item_specifics=specs),
+        ]
+        raw = CompsResult.from_listings(listings, marketplace="ebay", days=30)
+        raw.reranked = True
+        result = clean_comps(raw, keyword="Nike Vomero 6")
+        # Con reranked=True, relevance_filtered debe ser 0
+        assert result.relevance_filtered == 0
+        # Todos los listings sobreviven (reranker ya filtró)
+        assert result.clean_total == 5
+
+    def test_not_reranked_applies_relevance_filter(self):
+        """Sin reranked, relevance filter se aplica normalmente."""
+        specs = {"Brand": "Nike", "Model": "Vomero", "Color": "Black"}
+        listings = [
+            _make_listing(100.0, title="Nike Vomero 6 Black", brand="Nike", condition="New", item_specifics=specs),
+            _make_listing(95.0, title="Nike Vomero 6 White", brand="Nike", condition="New", item_specifics=specs),
+            _make_listing(105.0, title="Nike Vomero 6 Red", brand="Nike", condition="New", item_specifics=specs),
+            _make_listing(80.0, title="Nike Vomero 5 Blue", brand="Nike", condition="New", item_specifics=specs),
+            _make_listing(85.0, title="Nike Vomero 5 Green", brand="Nike", condition="New", item_specifics=specs),
+        ]
+        raw = CompsResult.from_listings(listings, marketplace="ebay", days=30)
+        raw.reranked = False
+        result = clean_comps(raw, keyword="Nike Vomero 6")
+        # Sin reranked, relevance filter debe aplicarse
+        assert result.relevance_filtered >= 2

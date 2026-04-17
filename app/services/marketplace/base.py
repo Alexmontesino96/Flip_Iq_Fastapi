@@ -74,6 +74,8 @@ class CompsResult:
     sales_by_date: list[SalesByDate] = field(default_factory=list)
     # Enrichment
     image_url: str | None = None
+    # Flag: True si ya pasó por reranker semántico (saltar filtros heurísticos en comp_cleaner)
+    reranked: bool = False
 
     @classmethod
     def from_listings(cls, listings: list[MarketplaceListing], marketplace: str = "", days: int = 30) -> "CompsResult":
