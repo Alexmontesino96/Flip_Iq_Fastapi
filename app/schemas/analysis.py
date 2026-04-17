@@ -60,7 +60,7 @@ class CompsInfo(BaseModel):
     p25: float = 0.0
     p75: float = 0.0
     sales_per_day: float = 0.0
-    days_of_data: int
+    days_of_data: float
     source: str  # "ebay_sold_cleaned", "fallback"
     distribution_shape: str = "unknown"  # normal|bimodal|skewed|insufficient
     price_distribution: list[PriceBucketOut] = []
