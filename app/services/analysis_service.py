@@ -713,16 +713,25 @@ async def run_analysis(
     # (condición correcta, sin ruido). Keyword trae items de otras condiciones
     # que contaminan la mediana de precio.
     upc_hit = bool(barcode and ebay_raw.listings)
-    if barcode and search_keyword and search_keyword != barcode and not ebay_raw.listings:
-        logger.info("eBay barcode sin resultados, fallback keyword='%s'", search_keyword)
-        try:
-            ebay_raw = await ebay.get_sold_comps(
-                keyword=search_keyword, days=30, limit=ebay_limit,
-                condition=condition, category_id=ebay_category_id,
-            )
-            upc_hit = False
-        except Exception as e:
-            logger.warning("eBay keyword fallback failed: %s", e)
+    if barcode and not ebay_raw.listings:
+        # Fallback keyword: search_keyword (de UPC lookup) o título de Amazon/Keepa
+        fallback_kw = search_keyword
+        if (not fallback_kw or fallback_kw == barcode) and amazon_raw and amazon_raw.listings:
+            # Usar título del primer listing de Amazon como keyword
+            fallback_kw = amazon_raw.listings[0].title
+            logger.info("Usando título de Amazon como fallback keyword: '%s'", fallback_kw)
+        if fallback_kw and fallback_kw != barcode:
+            logger.info("eBay barcode sin resultados, fallback keyword='%s'", fallback_kw)
+            try:
+                ebay_raw = await ebay.get_sold_comps(
+                    keyword=fallback_kw, days=30, limit=ebay_limit,
+                    condition=condition, category_id=ebay_category_id,
+                )
+                upc_hit = False
+                if not search_keyword:
+                    search_keyword = fallback_kw
+            except Exception as e:
+                logger.warning("eBay keyword fallback failed: %s", e)
 
     # -----------------------------------------------------------------------
     # 2. Enriquecer títulos eBay con LLM (Amazon/Keepa ya tiene datos struct.)
