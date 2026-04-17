@@ -138,6 +138,43 @@ def _has_condition_noise(title: str) -> bool:
     return bool(_CONDITION_NOISE.search(title))
 
 
+_COLOR_WORDS = {
+    "black", "white", "red", "blue", "green", "grey", "gray", "pink", "purple",
+    "orange", "yellow", "brown", "silver", "gold", "navy", "teal", "beige",
+    "coral", "ivory", "cream", "arctic", "feather", "pearl", "midnight",
+    "velvet", "morganite", "charcoal", "rose", "aqua", "indigo", "olive",
+    "platinum", "bronze", "copper", "magenta", "crimson", "slate", "onyx",
+}
+
+
+def _simplify_upc_title(title: str) -> str:
+    """Simplifica un título de UPC database para usarlo como keyword de eBay.
+
+    UPC databases devuelven títulos muy específicos con talla, color, material, etc:
+      "ASICS GEL-Nimbus(r) 28 Men's Running Shoes Black/Feather Grey : 7 D - Medium, Synthetic"
+    que no matchean nada en eBay. Cortamos specs innecesarias.
+    """
+    # Quitar trademark symbols
+    t = re.sub(r"[®™©]|\(r\)|\(tm\)", "", title, flags=re.IGNORECASE)
+    # Quitar todo después de ":" o "|" (suele ser talla/color/specs)
+    t = re.split(r"[:|]", t)[0]
+    # Quitar patrones de talla: "Size 7", "Sz 11", "7 D - Medium", etc.
+    t = re.sub(r"\b(?:size|sz)\s*\d+[.\d]*\s*\w*\b", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"\b\d+\s*D\s*-\s*\w+\b", "", t)
+    # Quitar material suelto
+    t = re.sub(r",?\s*\b(Synthetic|Leather|Mesh|Canvas|Suede|Rubber|Nylon|Polyester)\b", "", t, flags=re.IGNORECASE)
+    # Quitar trailing color phrase (e.g. "Black/Feather Grey")
+    # Match a final run of color words separated by spaces or /
+    t = re.sub(
+        r"\s+(?:" + "|".join(_COLOR_WORDS) + r")(?:[/\s]+(?:" + "|".join(_COLOR_WORDS) + r"))*\s*$",
+        "", t, flags=re.IGNORECASE,
+    )
+    # Limpiar puntuación trailing y espacios
+    t = re.sub(r"[,\-/]+\s*$", "", t)
+    t = re.sub(r"\s{2,}", " ", t).strip()
+    return t if len(t) >= 5 else title
+
+
 def _clean_search_keyword(keyword: str) -> tuple[str, str | None]:
     """Elimina frases de condición del keyword y detecta condición implícita.
 
@@ -640,8 +677,9 @@ async def run_analysis(
     if barcode and not keyword:
         upc_info = await lookup_upc(barcode)
         if upc_info and upc_info.get("title"):
-            keyword = upc_info["title"]
-            logger.info("UPC lookup: %s → '%s'", barcode, keyword)
+            raw_title = upc_info["title"]
+            keyword = _simplify_upc_title(raw_title)
+            logger.info("UPC lookup: %s → '%s' (raw: '%s')", barcode, keyword, raw_title)
 
     # 0b. Limpiar keyword: quitar frases de condición que contaminan la búsqueda
     # ("Lightly Used", "Brand New", etc.) — el filtro de condición se aplica en comp_cleaner
