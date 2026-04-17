@@ -714,11 +714,12 @@ async def run_analysis(
     _MIN_RECENT_COMPS = 80  # Mínimo de items recientes para considerar suficiente
     upc_hit = bool(barcode and ebay_raw.listings)
     if barcode and search_keyword and search_keyword != barcode:
-        # Contar items dentro de la ventana de 30 días (no el raw total)
+        # Contar items CON fecha dentro de la ventana de 30 días.
+        # Items sin ended_at no cuentan como recientes (son desconocidos).
         _recent_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
         recent_count = sum(
             1 for l in ebay_raw.listings
-            if l.ended_at is None or l.ended_at >= _recent_cutoff
+            if l.ended_at is not None and l.ended_at >= _recent_cutoff
         )
         logger.info(
             "UPC check: %d total listings, %d recent (last 30d)",
