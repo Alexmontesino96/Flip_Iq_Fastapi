@@ -623,7 +623,19 @@ async def run_analysis(
     from app.core.llm import reset_gemini
     reset_gemini()
 
-    # 0. Si solo hay barcode, intentar UPC lookup para obtener keyword
+    # 0. Normalizar barcode: strip leading zeros → formato UPC-12 / EAN-13 estándar
+    if barcode:
+        barcode = barcode.lstrip("0") or barcode  # no dejar vacío si era "000..."
+        # Re-pad a UPC-12 o EAN-13 estándar si quedó más corto
+        if len(barcode) < 12:
+            barcode = barcode.zfill(12)
+        elif len(barcode) == 12:
+            pass  # UPC-A estándar
+        elif len(barcode) < 13:
+            barcode = barcode.zfill(13)
+        logger.info("Barcode normalizado: '%s'", barcode)
+
+    # 0b. Si solo hay barcode, intentar UPC lookup para obtener keyword
     upc_info: dict | None = None
     if barcode and not keyword:
         upc_info = await lookup_upc(barcode)
