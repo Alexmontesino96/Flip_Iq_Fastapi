@@ -108,3 +108,33 @@ class TestDaysOfDataDynamic:
         ]
         result = CompsResult.from_listings(listings, days=30)
         assert result.days_of_data == 7.5
+
+    def test_days_capped_at_days_param(self):
+        """Span > days → days_of_data se capea al parámetro days."""
+        now = datetime.now(timezone.utc)
+        listings = [
+            _make_listing(100.0, ended_at=now - timedelta(days=120)),
+            _make_listing(110.0, ended_at=now - timedelta(days=60)),
+            _make_listing(105.0, ended_at=now),
+        ]
+        result = CompsResult.from_listings(listings, days=30)
+        # Span es ~120 días pero se capea a 30
+        assert result.days_of_data == 30
+        assert result.sales_per_day == round(3 / 30, 2)
+
+    def test_days_capped_preserves_temporal_filter(self):
+        """El cap asegura que comp_cleaner filtre items viejos correctamente."""
+        now = datetime.now(timezone.utc)
+        # 240 items: 200 en últimos 15 días, 40 de hace 90 días
+        listings = [
+            _make_listing(100.0 + i, ended_at=now - timedelta(days=15 * i / 199))
+            for i in range(200)
+        ] + [
+            _make_listing(100.0 + i, ended_at=now - timedelta(days=90))
+            for i in range(40)
+        ]
+        result = CompsResult.from_listings(listings, days=30)
+        # Span es ~90 días pero se capea a 30
+        assert result.days_of_data == 30
+        # total_sold incluye todos los 240 (raw, pre comp_cleaner)
+        assert result.total_sold == 240

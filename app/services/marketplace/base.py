@@ -90,7 +90,9 @@ class CompsResult:
         p25 = prices[max(0, n // 4 - 1)] if n >= 4 else prices[0]
         p75 = prices[min(n - 1, 3 * n // 4)] if n >= 4 else prices[-1]
 
-        # Calcular days_of_data real del rango de fechas de los listings
+        # Calcular days_of_data real del rango de fechas de los listings.
+        # Cap al parámetro `days` para que el filtro temporal en comp_cleaner
+        # siga funcionando correctamente (no expandir la ventana más allá de lo pedido).
         days_actual: float = days
         ended_dates = [l.ended_at for l in listings if l.ended_at is not None]
         if len(ended_dates) >= 2:
@@ -98,7 +100,7 @@ class CompsResult:
             newest = max(ended_dates)
             span = (newest - oldest).total_seconds() / 86400
             if span >= 1.0:
-                days_actual = round(span, 1)
+                days_actual = min(round(span, 1), days)
 
         result = cls(
             listings=listings,
