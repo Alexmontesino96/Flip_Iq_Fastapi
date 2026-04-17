@@ -665,10 +665,12 @@ async def run_analysis(
     # -----------------------------------------------------------------------
     # 1. Fetch de comps: eBay + Amazon en PARALELO
     # -----------------------------------------------------------------------
+    ebay_category_id = category_result.ebay_category_id if category_result else None
+
     ebay = _get_ebay_client()
     ebay_coro = ebay.get_sold_comps(
         barcode=barcode, keyword=search_keyword, days=30, limit=50,
-        condition=condition,
+        condition=condition, category_id=ebay_category_id,
     )
 
     amazon_raw: CompsResult | None = None
@@ -695,6 +697,7 @@ async def run_analysis(
         try:
             ebay_raw = await ebay.get_sold_comps(
                 keyword=search_keyword, days=30, limit=50, condition=condition,
+                category_id=ebay_category_id,
             )
         except Exception as e:
             logger.warning("eBay keyword fallback failed: %s", e)
@@ -755,6 +758,7 @@ async def run_analysis(
             ebay_raw2 = await ebay.get_sold_comps(
                 barcode=barcode, keyword=search_keyword, days=30,
                 limit=_REFETCH_LIMIT, condition=condition,
+                category_id=ebay_category_id,
             )
             if ebay_raw2.listings:
                 ebay_raw2 = await enrich_listings(

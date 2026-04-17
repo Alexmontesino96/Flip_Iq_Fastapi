@@ -1,6 +1,7 @@
-"""Product Categorizer — extrae product_type del keyword usando LLM.
+"""Product Categorizer — extrae product_type y ebay_category_id del keyword usando LLM.
 
 Permite filtrar datos contaminantes (e.g. viseras cuando buscas cascos).
+También mapea a una categoría de eBay (_sacat) para mejorar la precisión del scraper.
 Usa Gemini Flash (~100ms) con fallback a OpenAI, y None si no hay LLM.
 """
 
@@ -12,12 +13,46 @@ from app.core.llm import get_llm_client, disable_gemini, is_gemini_error
 
 logger = logging.getLogger(__name__)
 
+# Categorías curadas de eBay para resellers — usadas como _sacat en búsquedas
+EBAY_CATEGORIES: dict[int, str] = {
+    9355: "Cell Phones & Smartphones",
+    15032: "Video Games",
+    139971: "Video Game Consoles",
+    175673: "Laptops & Netbooks",
+    171485: "Tablets & eReaders",
+    112529: "Headphones",
+    178893: "Smartwatches",
+    11450: "Clothing, Shoes & Accessories",
+    15709: "Athletic Shoes",
+    95672: "Action Cameras",
+    31388: "Digital Cameras",
+    3676: "Desktop & All-In-One PCs",
+    183454: "Trading Cards",
+    261068: "Action Figures",
+    11116: "Building Toys",
+    20710: "Drones & Quadcopters",
+    73839: "TV, Video & Home Audio",
+    11700: "Home Appliances",
+    169291: "GPU / Video Cards",
+    164: "Monitors",
+    40054: "Handbags",
+    3034: "Power Tools",
+    11071: "Golf Clubs",
+    15724: "Bicycles",
+}
+
+_CATEGORY_LIST = "\n".join(f"  {cid}: {name}" for cid, name in EBAY_CATEGORIES.items())
+
 CATEGORIZE_PROMPT = """Given a product search keyword, extract:
 - product_type: the core product noun (e.g. "helmet", "sneakers", "phone")
 - category: human-readable category (e.g. "Cycling Helmet", "Running Shoes")
 - confidence: 0.0-1.0
+- ebay_category_id: the best matching eBay category ID from the list below, or null if none fits
 
-Return JSON only: {{"product_type": "...", "category": "...", "confidence": 0.9}}
+eBay categories:
+{categories}
+
+Return JSON only: {{"product_type": "...", "category": "...", "confidence": 0.9, "ebay_category_id": 9355}}
 
 Keyword: "{keyword}"
 """
@@ -25,13 +60,14 @@ Keyword: "{keyword}"
 
 @dataclass
 class CategoryResult:
-    product_type: str       # "helmet"
-    category: str           # "Cycling Helmet"
-    confidence: float       # 0.0-1.0
+    product_type: str              # "helmet"
+    category: str                  # "Cycling Helmet"
+    confidence: float              # 0.0-1.0
+    ebay_category_id: int | None   # 139971 (eBay _sacat)
 
 
 async def categorize_product(keyword: str) -> CategoryResult | None:
-    """Extrae product_type del keyword usando LLM.
+    """Extrae product_type y ebay_category_id del keyword usando LLM.
 
     Returns None si no hay LLM configurado o si falla.
     """
@@ -39,7 +75,7 @@ async def categorize_product(keyword: str) -> CategoryResult | None:
     if client is None:
         return None
 
-    prompt = CATEGORIZE_PROMPT.format(keyword=keyword)
+    prompt = CATEGORIZE_PROMPT.format(keyword=keyword, categories=_CATEGORY_LIST)
 
     for attempt in range(2):
         try:
@@ -60,10 +96,22 @@ async def categorize_product(keyword: str) -> CategoryResult | None:
             if not product_type:
                 return None
 
+            # Validar ebay_category_id contra lista curada
+            raw_cat_id = data.get("ebay_category_id")
+            ebay_category_id = None
+            if raw_cat_id is not None:
+                try:
+                    cat_id = int(raw_cat_id)
+                    if cat_id in EBAY_CATEGORIES:
+                        ebay_category_id = cat_id
+                except (ValueError, TypeError):
+                    pass
+
             return CategoryResult(
                 product_type=product_type,
                 category=data.get("category", ""),
                 confidence=float(data.get("confidence", 0.5)),
+                ebay_category_id=ebay_category_id,
             )
         except json.JSONDecodeError:
             logger.warning("Categorizer: respuesta no es JSON válido: %s", text[:200])

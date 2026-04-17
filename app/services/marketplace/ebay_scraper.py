@@ -369,6 +369,7 @@ async def scrape_sold_listings(
     proxy_url: str | None = None,
     condition: str | None = None,
     exclude_terms: list[str] | None = None,
+    category_id: int | None = None,
 ) -> list[dict]:
     """Scraper directo a eBay sold listings.
 
@@ -379,6 +380,7 @@ async def scrape_sold_listings(
                    Si se pasa, cada request sale por IP residencial rotativa.
         condition: Filtro de condición para eBay (new, used, refurbished, etc.).
         exclude_terms: Términos a excluir de la búsqueda. Si None, usa defaults.
+        category_id: ID de categoría eBay (_sacat) para filtrar resultados.
 
     Returns:
         Lista de dicts con formato compatible con Apify.
@@ -411,6 +413,8 @@ async def scrape_sold_listings(
                 "_sop": "13",        # ended recently first
                 "rt": "nc",          # no cache
             }
+            if category_id is not None:
+                params["_sacat"] = str(category_id)
             if condition and condition in _EBAY_CONDITION_IDS:
                 params["LH_ItemCondition"] = _EBAY_CONDITION_IDS[condition]
             if page > 1:

@@ -712,6 +712,55 @@ class TestEbayClientFallback:
         call_kwargs = mock_scraper.call_args
         assert call_kwargs.kwargs.get("condition") is None
 
+    @pytest.mark.asyncio
+    async def test_category_id_propagated_to_scraper(self):
+        """get_sold_comps(category_id=X) pasa category_id a scrape_sold_listings."""
+        from app.services.marketplace.ebay import EbayClient
+
+        client = EbayClient()
+        client._data_source = "scraper"
+        client._token = None
+
+        scraper_data = [
+            {"title": f"Switch {i}", "soldPrice": "200.00", "shippingPrice": "0", "totalPrice": "200.00"}
+            for i in range(10)
+        ]
+
+        with patch(
+            "app.services.marketplace.ebay.scrape_sold_listings",
+            new_callable=AsyncMock,
+            return_value=scraper_data,
+        ) as mock_scraper:
+            await client.get_sold_comps(keyword="Nintendo Switch OLED", category_id=139971)
+
+        mock_scraper.assert_called_once()
+        call_kwargs = mock_scraper.call_args
+        assert call_kwargs.kwargs.get("category_id") == 139971
+
+    @pytest.mark.asyncio
+    async def test_no_category_id_not_propagated(self):
+        """Sin category_id, no se pasa al scraper."""
+        from app.services.marketplace.ebay import EbayClient
+
+        client = EbayClient()
+        client._data_source = "scraper"
+        client._token = None
+
+        scraper_data = [
+            {"title": f"Switch {i}", "soldPrice": "200.00", "shippingPrice": "0", "totalPrice": "200.00"}
+            for i in range(10)
+        ]
+
+        with patch(
+            "app.services.marketplace.ebay.scrape_sold_listings",
+            new_callable=AsyncMock,
+            return_value=scraper_data,
+        ) as mock_scraper:
+            await client.get_sold_comps(keyword="Nintendo Switch OLED")
+
+        call_kwargs = mock_scraper.call_args
+        assert call_kwargs.kwargs.get("category_id") is None
+
 
 # ── Tests de Smart Query Building ──
 
@@ -751,6 +800,72 @@ class TestBuildSearchQuery:
     def test_empty_custom_exclusions(self):
         result = _build_search_query("iPhone", exclude_terms=[])
         assert result == "iPhone"
+
+
+class TestScrapeSoldListingsCategoryId:
+    @pytest.mark.asyncio
+    async def test_category_id_adds_sacat_param(self):
+        """category_id agrega _sacat a la URL."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = EBAY_SCARD_HTML_FIXTURE
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("app.services.marketplace.ebay_scraper.AsyncSession") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await scrape_sold_listings("Nintendo Switch OLED", category_id=139971)
+
+        call_kwargs = mock_client.get.call_args
+        params = call_kwargs.kwargs.get("params") or call_kwargs[1].get("params")
+        assert params["_sacat"] == "139971"
+
+    @pytest.mark.asyncio
+    async def test_no_category_id_no_sacat_param(self):
+        """Sin category_id, no agrega _sacat."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = EBAY_SCARD_HTML_FIXTURE
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("app.services.marketplace.ebay_scraper.AsyncSession") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await scrape_sold_listings("Nintendo Switch OLED")
+
+        call_kwargs = mock_client.get.call_args
+        params = call_kwargs.kwargs.get("params") or call_kwargs[1].get("params")
+        assert "_sacat" not in params
+
+    @pytest.mark.asyncio
+    async def test_category_id_with_condition(self):
+        """category_id y condition pueden coexistir."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = EBAY_SCARD_HTML_FIXTURE
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("app.services.marketplace.ebay_scraper.AsyncSession") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await scrape_sold_listings("Nintendo Switch OLED", condition="new", category_id=139971)
+
+        call_kwargs = mock_client.get.call_args
+        params = call_kwargs.kwargs.get("params") or call_kwargs[1].get("params")
+        assert params["_sacat"] == "139971"
+        assert params["LH_ItemCondition"] == _EBAY_CONDITION_IDS["new"]
 
 
 class TestScrapeSoldListingsConditionParams:

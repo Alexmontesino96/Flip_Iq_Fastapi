@@ -146,6 +146,7 @@ class EbayClient(MarketplaceClient):
         min_price: float | None = None,
         max_price: float | None = None,
         condition: str = "any",
+        category_id: int | None = None,
     ) -> CompsResult:
         """Obtiene ventas completadas reales de eBay.
 
@@ -159,6 +160,7 @@ class EbayClient(MarketplaceClient):
             min_price: Filtro de precio mínimo (se filtra post).
             max_price: Filtro de precio máximo (se filtra post).
             condition: Filtro de condición (new, used, refurbished, etc.). "any" = sin filtro.
+            category_id: ID de categoría eBay (_sacat) para filtrar resultados.
         """
         query = barcode or keyword
         if not query:
@@ -170,15 +172,15 @@ class EbayClient(MarketplaceClient):
         data: list[dict] | None = None
 
         if self._data_source == "rpi":
-            data = await self._fetch_via_rpi(query, limit)
+            data = await self._fetch_via_rpi(query, limit, category_id=category_id)
             if data is None:
                 logger.info("RPi proxy falló, intentando scraper directo para '%s'", query)
-                data = await self._fetch_via_scraper(query, limit, condition=cond)
+                data = await self._fetch_via_scraper(query, limit, condition=cond, category_id=category_id)
             if data is None and self._token:
                 logger.info("Scraper directo falló, intentando Apify para '%s'", query)
                 data = await self._fetch_via_apify(query, limit)
         elif self._data_source == "scraper":
-            data = await self._fetch_via_scraper(query, limit, condition=cond)
+            data = await self._fetch_via_scraper(query, limit, condition=cond, category_id=category_id)
             if data is None and self._token:
                 logger.info("Scraper falló, intentando fallback a Apify para '%s'", query)
                 data = await self._fetch_via_apify(query, limit)
@@ -195,7 +197,9 @@ class EbayClient(MarketplaceClient):
 
         return CompsResult.from_listings(listings, marketplace="ebay", days=days)
 
-    async def _fetch_via_rpi(self, query: str, limit: int) -> list[dict] | None:
+    async def _fetch_via_rpi(
+        self, query: str, limit: int, category_id: int | None = None,
+    ) -> list[dict] | None:
         """Obtiene datos via pool de RPi Scraper Proxies (IPs residenciales).
 
         Round-robin entre proxies disponibles. Si uno falla, prueba el siguiente.
@@ -213,10 +217,13 @@ class EbayClient(MarketplaceClient):
         for _ in range(len(self._rpi_urls)):
             rpi_url = next(self._rpi_cycle)
             try:
+                body: dict = {"keyword": query, "limit": limit}
+                if category_id is not None:
+                    body["category_id"] = category_id
                 async with httpx.AsyncClient(timeout=25) as client:
                     resp = await client.post(
                         f"{rpi_url}/scrape",
-                        json={"keyword": query, "limit": limit},
+                        json=body,
                         headers=headers,
                     )
                     resp.raise_for_status()
@@ -243,6 +250,7 @@ class EbayClient(MarketplaceClient):
 
     async def _fetch_via_scraper(
         self, query: str, limit: int, condition: str | None = None,
+        category_id: int | None = None,
     ) -> list[dict] | None:
         """Intenta obtener datos via scraper directo. Usa proxy residencial si está configurado.
 
@@ -253,7 +261,7 @@ class EbayClient(MarketplaceClient):
             try:
                 data = await scrape_sold_listings(
                     query, limit=limit, proxy_url=self._proxy_url,
-                    condition=condition,
+                    condition=condition, category_id=category_id,
                 )
                 if data and (len(data) >= 5 or attempt == 1):
                     return data
