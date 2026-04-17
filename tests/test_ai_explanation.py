@@ -138,7 +138,7 @@ class TestMaxTokens:
             )
 
             call_kwargs = mock_client.chat.completions.create.call_args[1]
-            assert call_kwargs["max_tokens"] >= 1200
+            assert call_kwargs["max_tokens"] >= 2000
 
 
 class TestGenerateExplanation:

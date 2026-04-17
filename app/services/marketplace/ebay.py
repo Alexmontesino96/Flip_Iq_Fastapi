@@ -239,22 +239,32 @@ class EbayClient(MarketplaceClient):
         return None
 
     async def _fetch_via_scraper(self, query: str, limit: int) -> list[dict] | None:
-        """Intenta obtener datos via scraper directo. Usa proxy residencial si está configurado."""
-        try:
-            data = await scrape_sold_listings(query, limit=limit, proxy_url=self._proxy_url)
-            if not data:
-                logger.warning("Scraper retornó 0 resultados para '%s'", query)
+        """Intenta obtener datos via scraper directo. Usa proxy residencial si está configurado.
+
+        Reintenta UNA vez si obtiene resultados pero muy pocos (< 5),
+        ya que eBay puede servir HTML parcial por sesión/IP.
+        """
+        for attempt in range(2):
+            try:
+                data = await scrape_sold_listings(query, limit=limit, proxy_url=self._proxy_url)
+                if data and (len(data) >= 5 or attempt == 1):
+                    return data
+                if not data:
+                    logger.warning("Scraper retornó 0 resultados para '%s'", query)
+                    return None
+                logger.info("Scraper retornó solo %d resultados para '%s', reintentando", len(data), query)
+            except httpx.HTTPStatusError as e:
+                logger.warning("Scraper HTTP error %s para '%s'", e.response.status_code, query)
                 return None
-            return data
-        except httpx.HTTPStatusError as e:
-            logger.warning("Scraper HTTP error %s para '%s'", e.response.status_code, query)
-            return None
-        except httpx.TimeoutException:
-            logger.warning("Scraper timeout para '%s'", query)
-            return None
-        except Exception as e:
-            logger.warning("Scraper error para '%s': %s", query, e)
-            return None
+            except httpx.TimeoutException:
+                logger.warning("Scraper timeout para '%s'", query)
+                if attempt == 0:
+                    continue
+                return None
+            except Exception as e:
+                logger.warning("Scraper error para '%s': %s", query, e)
+                return None
+        return None
 
     async def _fetch_via_apify(self, query: str, limit: int) -> list[dict] | None:
         """Obtiene datos via Apify. Retorna None si falla."""

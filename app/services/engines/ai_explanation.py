@@ -157,12 +157,15 @@ async def generate_explanation(
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_msg},
             ],
-            max_tokens=1200,
+            max_tokens=2000,
             temperature=0.7,
-            timeout=15,
+            timeout=25,
         )
 
-        return _strip_markdown(response.choices[0].message.content)
+        text = response.choices[0].message.content
+        if response.choices[0].finish_reason == "length":
+            logger.warning("AI explanation truncated (hit max_tokens)")
+        return _strip_markdown(text)
 
     except Exception as e:
         # Auto-fallback a OpenAI si Gemini falla
@@ -178,11 +181,14 @@ async def generate_explanation(
                             {"role": "system", "content": SYSTEM_PROMPT},
                             {"role": "user", "content": user_msg},
                         ],
-                        max_tokens=1200,
+                        max_tokens=2000,
                         temperature=0.7,
-                        timeout=15,
+                        timeout=25,
                     )
-                    return _strip_markdown(response.choices[0].message.content)
+                    text = response.choices[0].message.content
+                    if response.choices[0].finish_reason == "length":
+                        logger.warning("AI explanation truncated on fallback (hit max_tokens)")
+                    return _strip_markdown(text)
                 except Exception as e2:
                     logger.warning("OpenAI fallback also failed: %s", e2)
         logger.warning("AI explanation failed: %s", e)

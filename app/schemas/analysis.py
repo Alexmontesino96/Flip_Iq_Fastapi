@@ -237,6 +237,7 @@ class Returns(BaseModel):
 class AnalysisSummary(BaseModel):
     """Bloque resumen para decisión rápida del revendedor."""
     recommendation: str          # buy|buy_small|watch|pass
+    signal: str = "neutral"      # positive|caution|negative|neutral
     buy_box: BuyBox
     sale_plan: SalePlan
     returns: Returns

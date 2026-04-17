@@ -916,8 +916,11 @@ async def run_analysis(
 
     # Summary
     headroom = (primary.max_buy.recommended_max - cost_price) if has_valid_comps else 0.0
+    signal_map = {"buy": "positive", "buy_small": "positive", "watch": "caution", "pass": "negative"}
+    signal = signal_map.get(recommendation, "neutral")
     summary = AnalysisSummary(
         recommendation=recommendation,
+        signal=signal,
         buy_box=BuyBox(
             recommended_max_buy=primary.max_buy.recommended_max if has_valid_comps else 0.0,
             your_cost=cost_price,
