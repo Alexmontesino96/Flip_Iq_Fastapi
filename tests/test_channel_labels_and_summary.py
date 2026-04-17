@@ -34,12 +34,10 @@ class TestAssignChannelLabels:
         channels = [
             _make_channel("amazon_fba", profit=20.0, roi_pct=30.0),
             _make_channel("ebay", profit=-5.0, roi_pct=-10.0),
-            _make_channel("mercadolibre", profit=-15.0, roi_pct=-20.0),
         ]
         _assign_channel_labels(channels)
         assert channels[0].label == "ONLY PROFITABLE"
         assert channels[1].label is None
-        assert channels[2].label is None
 
     def test_best_profit_and_roi_labels(self):
         """When multiple channels are profitable, assign BEST PROFIT and BEST ROI."""
@@ -48,7 +46,6 @@ class TestAssignChannelLabels:
         channels = [
             _make_channel("amazon_fba", profit=20.0, roi_pct=25.0),
             _make_channel("ebay", profit=10.0, roi_pct=40.0),
-            _make_channel("mercadolibre", profit=-5.0, roi_pct=-10.0),
         ]
         _assign_channel_labels(channels)
         assert channels[0].label == "BEST PROFIT"

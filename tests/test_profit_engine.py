@@ -62,14 +62,6 @@ class TestProfitEngine:
         )
         assert result.fee_rate == 0.15
 
-    def test_facebook_fee_rate(self):
-        result = compute_profit(
-            sale_price=100.0,
-            cost_price=50.0,
-            marketplace="facebook_marketplace",
-        )
-        assert result.fee_rate == 0.05
-
     def test_unknown_marketplace_defaults_ebay(self):
         result = compute_profit(
             sale_price=100.0,

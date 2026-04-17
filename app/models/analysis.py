@@ -17,7 +17,7 @@ class Analysis(Base):
 
     # Inputs
     cost_price: Mapped[float] = mapped_column(Numeric(10, 2))
-    marketplace: Mapped[str] = mapped_column(String(50))  # ebay|amazon_fba|mercadolibre|facebook_marketplace
+    marketplace: Mapped[str] = mapped_column(String(50))  # ebay|amazon_fba
 
     # Results
     estimated_sale_price: Mapped[float | None] = mapped_column(Numeric(10, 2))

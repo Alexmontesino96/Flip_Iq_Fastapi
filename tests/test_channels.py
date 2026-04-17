@@ -95,20 +95,6 @@ class TestCalculateAllChannels:
         ebay = next(ch for ch in channels if ch.marketplace == "ebay")
         assert ebay.is_estimated is False
 
-    def test_mercadolibre_is_estimated(self):
-        channels = _calculate_all_channels(
-            10.0, 50.0, has_own_data={"ebay"},
-        )
-        ml = next(ch for ch in channels if ch.marketplace == "mercadolibre")
-        assert ml.is_estimated is True
-
-    def test_facebook_is_estimated(self):
-        channels = _calculate_all_channels(
-            10.0, 50.0, has_own_data={"ebay"},
-        )
-        fb = next(ch for ch in channels if ch.marketplace == "facebook_marketplace")
-        assert fb.is_estimated is True
-
     def test_amazon_with_own_data_not_estimated(self):
         channels = _calculate_all_channels(
             10.0, 50.0, has_own_data={"ebay", "amazon_fba"},

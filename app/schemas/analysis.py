@@ -8,7 +8,7 @@ class AnalysisRequest(BaseModel):
     barcode: str | None = None
     keyword: str | None = None
     cost_price: float
-    marketplace: str = "ebay"  # ebay|amazon_fba|mercadolibre|facebook_marketplace
+    marketplace: str = "ebay"  # ebay|amazon_fba
     # Costos opcionales del revendedor
     shipping_cost: float = 0.0
     packaging_cost: float = 0.0

@@ -76,16 +76,12 @@ def facebook_marketplace_fees(
 MARKETPLACE_FEE_RATES = {
     "ebay": 0.1325,
     "amazon_fba": 0.15,
-    "mercadolibre": 0.16,
-    "facebook_marketplace": 0.05,
 }
 
 
 MARKETPLACE_CALCULATORS = {
     "ebay": ebay_fees,
     "amazon_fba": amazon_fba_fees,
-    "mercadolibre": mercadolibre_fees,
-    "facebook_marketplace": facebook_marketplace_fees,
 }
 
 
