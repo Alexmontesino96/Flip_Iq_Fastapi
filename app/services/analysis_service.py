@@ -905,7 +905,9 @@ async def run_analysis(
     risk = primary.risk
     opportunity = primary.opportunity
     recommendation = primary.recommendation
-    warnings = list(primary.warnings)
+    # Warnings globales: solo cross-marketplace (market events, etc.)
+    # Las warnings de cada pipeline ya van en ebay_analysis.warnings / amazon_analysis.warnings
+    warnings: list[str] = []
 
     if market_intel is not None:
         if market_intel.depreciation_risk > 70:
@@ -1001,15 +1003,18 @@ async def run_analysis(
         estimated_sale = None
         channels = None
 
-    # Summary
-    headroom = (primary.max_buy.recommended_max - cost_price) if has_valid_comps else 0.0
+    # Summary — BuyBox usa el mejor max_buy entre todos los pipelines válidos
+    best_max_buy = primary.max_buy.recommended_max if has_valid_comps else 0.0
+    if amazon_pipeline and amazon_pipeline.has_valid_comps:
+        best_max_buy = max(best_max_buy, amazon_pipeline.max_buy.recommended_max)
+    headroom = (best_max_buy - cost_price) if has_valid_comps else 0.0
     signal_map = {"buy": "positive", "buy_small": "positive", "watch": "caution", "pass": "negative"}
     signal = signal_map.get(recommendation, "neutral")
     summary = AnalysisSummary(
         recommendation=recommendation,
         signal=signal,
         buy_box=BuyBox(
-            recommended_max_buy=primary.max_buy.recommended_max if has_valid_comps else 0.0,
+            recommended_max_buy=best_max_buy,
             your_cost=cost_price,
             headroom=round(headroom, 2),
         ),
@@ -1429,9 +1434,17 @@ def _assign_channel_labels(channels: list[ChannelBreakdown]) -> None:
     # Reset labels
     for ch in channels:
         ch.label = None
-    # BEST PROFIT: ya está sorted por profit desc → channels[0]
-    channels[0].label = "BEST PROFIT"
-    # BEST ROI: si es diferente al de mejor profit
-    best_roi_idx = max(range(len(channels)), key=lambda i: channels[i].roi_pct)
-    if best_roi_idx != 0:
-        channels[best_roi_idx].label = "BEST ROI"
+
+    # Channels ya vienen sorted por profit desc → channels[0] es el de mayor profit
+    profitable_channels = [ch for ch in channels if ch.profit > 0]
+
+    if len(profitable_channels) == 1:
+        # Solo 1 canal es rentable → "ONLY PROFITABLE"
+        profitable_channels[0].label = "ONLY PROFITABLE"
+    elif len(profitable_channels) > 1:
+        # Varios canales rentables → BEST PROFIT + BEST ROI
+        channels[0].label = "BEST PROFIT"
+        best_roi_idx = max(range(len(channels)), key=lambda i: channels[i].roi_pct)
+        if best_roi_idx != 0:
+            channels[best_roi_idx].label = "BEST ROI"
+    # Si ninguno es rentable, no se asigna label
