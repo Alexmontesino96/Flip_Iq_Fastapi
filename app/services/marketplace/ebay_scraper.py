@@ -57,7 +57,14 @@ def _build_search_query(keyword: str, exclude_terms: list[str] | None = None) ->
     """Agrega exclusiones a la query para filtrar basura desde eBay.
 
     Solo excluye términos que NO aparecen en el keyword del usuario.
+    Si el keyword es numérico (barcode/UPC), NO excluir nada — la búsqueda
+    por UPC ya es específica y las exclusiones pueden filtrar resultados
+    legítimos (ej. "-case" elimina AirPods Pro "MagSafe Case").
     """
+    # Barcode/UPC: no aplicar exclusiones
+    if keyword.strip().isdigit():
+        return keyword
+
     kw_lower = keyword.lower()
     exclusions = _DEFAULT_EXCLUSIONS if exclude_terms is None else exclude_terms
     safe = [t for t in exclusions if t.lower() not in kw_lower]
