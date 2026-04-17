@@ -553,8 +553,8 @@ class TestScrapeSoldListings:
             results = await scrape_sold_listings("nonexistent product xyz")
 
         assert results == []
-        # Solo una llamada (no paginó)
-        assert mock_client.get.call_count == 1
+        # 2 llamadas: warmup (homepage) + 1 página de búsqueda (no paginó más)
+        assert mock_client.get.call_count == 2
 
 
 # ── Tests del fallback en EbayClient ──

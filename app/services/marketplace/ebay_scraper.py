@@ -404,12 +404,19 @@ async def scrape_sold_listings(
     client_kwargs: dict = {
         "timeout": SCRAPER_TIMEOUT,
         "allow_redirects": True,
-        "impersonate": "chrome",
+        "impersonate": "chrome120",
     }
     if proxy_url:
         client_kwargs["proxy"] = proxy_url
 
     async with AsyncSession(**client_kwargs) as client:
+        # Warmup: visitar eBay homepage para establecer cookies de sesión
+        # y evitar challenge/CAPTCHA en la búsqueda de sold listings
+        try:
+            await client.get("https://www.ebay.com/", headers=_get_headers())
+        except Exception:
+            pass  # best-effort warmup
+
         while len(results) < limit and page <= max_pages:
             params = {
                 "_nkw": _build_search_query(keyword, exclude_terms),
@@ -433,6 +440,11 @@ async def scrape_sold_listings(
                 headers=_get_headers(),
             )
             resp.raise_for_status()
+
+            # Detectar CAPTCHA/challenge redirect
+            if "challenge" in str(resp.url):
+                logger.warning("eBay CAPTCHA detectado para '%s'", keyword)
+                break
 
             page_results = parse_sold_listings(resp.text)
             if not page_results:
