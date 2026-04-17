@@ -68,6 +68,9 @@ async def join_waitlist(
             content={"message": "Welcome back! You're verified.", "email": payload.email},
         )
         await _set_verification_cookie(response, payload.email, redis)
+        # Mark email as verified in Redis (for X-Verified-Email header fallback)
+        if redis:
+            await redis.set(f"waitlist:{payload.email}", "1", ex=TTL_30D)
         return response
 
     entry = WaitlistEntry(email=payload.email, source=payload.source)
@@ -79,6 +82,9 @@ async def join_waitlist(
         content={"message": "You're on the list!", "email": payload.email},
     )
     await _set_verification_cookie(response, payload.email, redis)
+    # Mark email as verified in Redis (for X-Verified-Email header fallback)
+    if redis:
+        await redis.set(f"waitlist:{payload.email}", "1", ex=TTL_30D)
     return response
 
 

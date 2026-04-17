@@ -74,19 +74,27 @@ async def check_analysis_gate(request: Request, redis) -> GateResult:
 async def _check_gate_redis(request: Request, redis) -> GateResult:
     """Inner gate logic — all Redis calls here so caller can catch errors."""
     # 2. Email-verified cookie
+    email: str | None = None
     token = request.cookies.get("flipiq_verified")
     if token:
         email = await redis.get(f"email_token:{token}")
-        if email:
-            count = int(await redis.get(f"verified:{email}") or 0)
-            if count >= VERIFIED_LIMIT:
-                ttl = await redis.ttl(f"verified:{email}")
-                return GateResult(
-                    allowed=False, tier="verified", remaining=0, reset_in=max(ttl, 0)
-                )
+
+    # 2b. Fallback: X-Verified-Email header (cross-domain where cookies fail)
+    if not email:
+        header_email = request.headers.get("x-verified-email", "").strip().lower()
+        if header_email and await redis.get(f"waitlist:{header_email}"):
+            email = header_email
+
+    if email:
+        count = int(await redis.get(f"verified:{email}") or 0)
+        if count >= VERIFIED_LIMIT:
+            ttl = await redis.ttl(f"verified:{email}")
             return GateResult(
-                allowed=True, tier="verified", remaining=VERIFIED_LIMIT - count
+                allowed=False, tier="verified", remaining=0, reset_in=max(ttl, 0)
             )
+        return GateResult(
+            allowed=True, tier="verified", remaining=VERIFIED_LIMIT - count
+        )
 
     # 3. Anonymous — 3/day by IP + optional X-Client-ID
     ip = get_remote_address(request)
@@ -119,14 +127,17 @@ async def increment_analysis_counter(request: Request, redis, gate: GateResult) 
 
     try:
         if gate.tier == "verified":
+            email: str | None = None
             token = request.cookies.get("flipiq_verified")
             if token:
                 email = await redis.get(f"email_token:{token}")
-                if email:
-                    key = f"verified:{email}"
-                    count = await redis.incr(key)
-                    if count == 1:
-                        await redis.expire(key, TTL_24H)
+            if not email:
+                email = request.headers.get("x-verified-email", "").strip().lower() or None
+            if email:
+                key = f"verified:{email}"
+                count = await redis.incr(key)
+                if count == 1:
+                    await redis.expire(key, TTL_24H)
             return
 
         # Anonymous
