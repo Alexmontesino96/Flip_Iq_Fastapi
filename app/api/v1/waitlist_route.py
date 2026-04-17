@@ -44,7 +44,7 @@ async def _set_verification_cookie(
         value=token,
         max_age=TTL_30D,
         httponly=True,
-        samesite="lax" if is_prod else "lax",
+        samesite="none" if is_prod else "lax",
         secure=is_prod,
     )
     return token
