@@ -112,8 +112,11 @@ def _compute_relevance(listing: MarketplaceListing, keyword: str) -> float:
     keyword_lower = keyword.lower()
     title_lower = (listing.title or "").lower()
 
-    # Model match: qué tan bien coincide el título con el keyword
-    model_match = SequenceMatcher(None, keyword_lower, title_lower).ratio()
+    # Model match: fracción de palabras del keyword presentes en el título.
+    # Más robusto que SequenceMatcher que penaliza títulos largos vs keywords cortos.
+    kw_words = set(keyword_lower.split())
+    title_words = set(title_lower.split())
+    model_match = len(kw_words & title_words) / len(kw_words) if kw_words else 0.0
 
     # Penalizar si el modelo numérico es diferente (e.g. Vomero 6 vs Vomero 5)
     kw_models = _extract_model_numbers(keyword_lower)
@@ -194,8 +197,15 @@ def _compute_stats(prices: list[float]) -> dict:
 _DANGER_WEIGHT_THRESHOLD = 0.7  # Solo filtrar flags con peso >= 0.7
 
 
-def _matches_product_type(title: str, product_type: str) -> bool:
-    """Verifica si un título contiene el product_type (singular/plural)."""
+def _matches_product_type(title: str, product_type: str, keyword: str | None = None) -> bool:
+    """Verifica si un título es relevante para el product_type.
+
+    Acepta si:
+    1. El título contiene el product_type (singular/plural), O
+    2. El título contiene todas las palabras significativas del keyword (len >= 3).
+       Esto resuelve el caso donde listings válidos no usan la palabra del product_type
+       (ej: "Nintendo Switch OLED 64GB" no dice "console" pero es claramente el producto).
+    """
     pt = product_type.lower().strip()
     title_lower = title.lower()
     # Chequear singular y plural simple
@@ -209,7 +219,17 @@ def _matches_product_type(title: str, product_type: str) -> bool:
         variants.add(pt[:-3] + "y")
     elif pt.endswith("y") and not pt.endswith("ey"):
         variants.add(pt[:-1] + "ies")
-    return any(re.search(r"\b" + re.escape(v) + r"\b", title_lower) for v in variants)
+    if any(re.search(r"\b" + re.escape(v) + r"\b", title_lower) for v in variants):
+        return True
+
+    # Fallback: si el título contiene TODAS las palabras significativas del keyword,
+    # es muy probable que sea el producto correcto aunque no diga el product_type.
+    if keyword:
+        kw_words = [w for w in keyword.lower().split() if len(w) >= 3]
+        if kw_words and all(w in title_lower for w in kw_words):
+            return True
+
+    return False
 
 
 def _filter_by_danger(
@@ -330,10 +350,11 @@ def clean_comps(
     if product_type and after_outliers:
         matched_pt = [
             l for l in after_outliers
-            if _matches_product_type(l.title or "", product_type)
+            if _matches_product_type(l.title or "", product_type, keyword)
         ]
-        # Solo aplicar si quedan >= 3 comps
-        if len(matched_pt) >= 3:
+        # Safety net: no filtrar si quedarían menos del 40% de los comps
+        min_keep = max(3, int(len(after_outliers) * 0.4))
+        if len(matched_pt) >= min_keep:
             product_type_filtered = len(after_outliers) - len(matched_pt)
             after_outliers = matched_pt
 

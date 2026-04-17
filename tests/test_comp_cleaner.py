@@ -354,6 +354,33 @@ class TestMatchesProductType:
         assert _matches_product_type("Rechargeable Batteries Pack", "battery") is True
         assert _matches_product_type("AA Battery NiMH", "batteries") is True
 
+    def test_keyword_fallback_all_words_present(self):
+        """Título sin product_type pero con todas las palabras del keyword → True."""
+        assert _matches_product_type(
+            "Nintendo Switch OLED 64GB White", "console",
+            keyword="Nintendo Switch OLED",
+        ) is True
+
+    def test_keyword_fallback_partial_words_fail(self):
+        """Si faltan palabras del keyword, no pasa por keyword fallback."""
+        assert _matches_product_type(
+            "Nintendo Switch Case", "console",
+            keyword="Nintendo Switch OLED",
+        ) is False
+
+    def test_keyword_fallback_not_needed_when_pt_matches(self):
+        """Si el título ya contiene el product_type, keyword no es necesario."""
+        assert _matches_product_type(
+            "Nintendo Switch OLED Console", "console",
+        ) is True
+
+    def test_keyword_fallback_ignores_short_words(self):
+        """Palabras del keyword < 3 chars se ignoran (ej: 'of', 'on')."""
+        assert _matches_product_type(
+            "Set of Markers Professional", "marker",
+            keyword="Set of Markers",
+        ) is True
+
 
 class TestDangerFilter:
     def test_filters_replacement(self):
@@ -428,6 +455,27 @@ class TestProductTypeFiltering:
         ])
         result = clean_comps(raw, keyword="Oakley Aro3 Helmet")
         assert result.product_type_filtered == 0
+
+    def test_keyword_fallback_keeps_valid_listings(self):
+        """Listings sin product_type pero con keyword completo se mantienen."""
+        raw = self._make_comps_with_titles([
+            ("Nintendo Switch OLED Console 64GB", 280.0),
+            ("Nintendo Switch OLED Model HEG-001 White", 290.0),
+            ("Nintendo Switch OLED 64GB Neon Red/Blue", 275.0),
+            ("Nintendo Switch OLED System Bundle", 300.0),
+            ("Nintendo Switch OLED Edition Zelda", 310.0),
+            ("Nintendo Switch Pro Controller", 50.0),
+            ("Switch OLED Screen Protector", 10.0),
+        ])
+        result = clean_comps(
+            raw, keyword="Nintendo Switch OLED", product_type="console",
+        )
+        # Los 5 Switch OLED válidos deben sobrevivir (contienen "console" o keywords)
+        # El controller no tiene "OLED" → falla keyword check
+        # El screen protector no tiene "Nintendo" → falla keyword check
+        assert result.clean_total >= 5
+        for l in result.listings:
+            assert "switch" in l.title.lower() and "oled" in l.title.lower()
 
     def test_danger_filter_in_clean_comps(self):
         """Danger filter removes high-weight flagged listings."""
