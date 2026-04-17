@@ -124,6 +124,20 @@ _CONDITION_MAP: dict[str, str] = {
 }
 
 
+_CONDITION_NOISE = re.compile(
+    r"\b(good condition|fair condition|poor condition|excellent condition"
+    r"|like new|near mint|mint condition|pre-owned|pre owned|preowned"
+    r"|used|refurbished|renewed|open box|for parts|not working"
+    r"|as is|damaged|broken|cracked)\b",
+    re.IGNORECASE,
+)
+
+
+def _has_condition_noise(title: str) -> bool:
+    """True si el título tiene frases de condición típicas de eBay."""
+    return bool(_CONDITION_NOISE.search(title))
+
+
 def _clean_search_keyword(keyword: str) -> tuple[str, str | None]:
     """Elimina frases de condición del keyword y detecta condición implícita.
 
@@ -167,6 +181,7 @@ class _PipelineResult:
     trend: Any
     listing: Any
     condition_analysis: ConditionAnalysisOut
+    condition_subset_pricing: dict | None
     opportunity: int
     recommendation: str
     warnings: list[str]
@@ -246,8 +261,28 @@ def _run_pipeline(
     # Motor K: Listing Strategy
     listing = compute_listing_strategy(cleaned, velocity, risk, quick_price=pricing.quick_list)
 
-    # Condition Analysis
-    condition_analysis = _build_condition_analysis(cleaned)
+    # Condition Analysis + Mini-pipeline sobre condition subset
+    condition_subset_pricing = None
+    if (
+        cleaned.condition_subset_count > 0
+        and cleaned.condition_subset_median is not None
+        and cleaned.condition_subset_median > 0
+    ):
+        subset_profit = compute_profit(
+            cleaned.condition_subset_median, cost_price, marketplace_name,
+            shipping_cost, packaging_cost, prep_cost, promo_cost, return_reserve_pct,
+        )
+        subset_max_buy = compute_max_buy(subset_profit, target_profit, target_roi)
+        condition_subset_pricing = {
+            "count": cleaned.condition_subset_count,
+            "median": cleaned.condition_subset_median,
+            "profit": subset_profit.profit,
+            "roi_pct": round(subset_profit.roi * 100, 2),
+            "margin_pct": round(subset_profit.margin * 100, 2),
+            "max_buy": subset_max_buy.recommended_max,
+        }
+
+    condition_analysis = _build_condition_analysis(cleaned, condition_subset_pricing)
 
     # Opportunity Score
     if cleaned.clean_total > 0:
@@ -267,6 +302,7 @@ def _run_pipeline(
         recommendation, confidence, title_risk, cleaned, profit_market,
         max_buy=max_buy, cost_price=cost_price,
         distribution_shape=distribution_shape,
+        condition_subset_pricing=condition_subset_pricing,
     )
 
     # Warning: mercado dominado por un seller
@@ -278,7 +314,7 @@ def _run_pipeline(
         )
 
     # Warning de demand spike temporal
-    if trend.demand_trend > 80 and trend.burstiness > 0.25:
+    if trend.demand_trend > 80 and trend.burstiness > 0.25 and trend.confidence != "low":
         warnings.append(
             f"Demand spike detected ({trend.demand_trend:+.0f}%). "
             "Sales concentrated in a few days — may be temporary. "
@@ -322,6 +358,7 @@ def _run_pipeline(
         trend=trend,
         listing=listing,
         condition_analysis=condition_analysis,
+        condition_subset_pricing=condition_subset_pricing,
         opportunity=opportunity,
         recommendation=recommendation,
         warnings=warnings,
@@ -421,7 +458,10 @@ def _decide(opportunity_score: int, profit_market, risk, confidence) -> str:
     return "pass"
 
 
-def _build_condition_analysis(cleaned: CleanedComps) -> ConditionAnalysisOut:
+def _build_condition_analysis(
+    cleaned: CleanedComps,
+    condition_subset_pricing: dict | None = None,
+) -> ConditionAnalysisOut:
     """Construye el bloque de análisis de condición."""
     counts = cleaned.condition_counts
     has_new = counts.get("new", 0) > 0
@@ -438,6 +478,7 @@ def _build_condition_analysis(cleaned: CleanedComps) -> ConditionAnalysisOut:
         raw_condition_total=cleaned.raw_total - cleaned.outliers_removed,
         condition_subset_count=cleaned.condition_subset_count,
         condition_subset_median=cleaned.condition_subset_median,
+        condition_subset_pricing=condition_subset_pricing,
     )
 
 
@@ -450,6 +491,7 @@ def _validate_buy(
     max_buy=None,
     cost_price: float = 0.0,
     distribution_shape: str = "unknown",
+    condition_subset_pricing: dict | None = None,
 ) -> tuple[str, list[str]]:
     """Validador pre-BUY. Puede degradar 'buy' a 'buy_small' o 'watch' con warnings."""
     warnings: list[str] = []
@@ -476,14 +518,21 @@ def _validate_buy(
         if cleaned.condition_filtered == 0 and cleaned.condition_match_rate < 0.5:
             # Safety net activó: no pudo filtrar por condición
             if cleaned.condition_subset_median is not None and cleaned.condition_subset_count > 0:
-                warnings.append(
+                base_msg = (
                     f"Only {cleaned.condition_subset_count} of {cleaned.clean_total} comps "
                     f"match '{cleaned.requested_condition}' condition "
                     f"(subset median ${cleaned.condition_subset_median:.2f}). "
                     f"Prices shown are based on all {cleaned.clean_total} comps "
-                    f"(median ${cleaned.median_price:.2f}). "
-                    f"Results may underestimate the '{cleaned.requested_condition}' market value."
+                    f"(median ${cleaned.median_price:.2f})."
                 )
+                if condition_subset_pricing:
+                    base_msg += (
+                        f" If selling as '{cleaned.requested_condition}': "
+                        f"est. profit ${condition_subset_pricing['profit']:.2f}, "
+                        f"ROI {condition_subset_pricing['roi_pct']:.1f}%, "
+                        f"max buy ${condition_subset_pricing['max_buy']:.2f}."
+                    )
+                warnings.append(base_msg)
             else:
                 warnings.append(
                     f"No comps found in '{cleaned.requested_condition}' condition. "
@@ -1200,6 +1249,9 @@ async def _find_or_create_product(
                 product.avg_sell_price = comps.median_price
             if not product.brand:
                 product.brand = detect_brand(keyword) or detect_brand(product.title)
+            # Fix: actualizar título si contiene frases de condición del eBay listing
+            if keyword and _has_condition_noise(product.title):
+                product.title = keyword
             return product
 
     title = keyword or barcode or "Untitled product"

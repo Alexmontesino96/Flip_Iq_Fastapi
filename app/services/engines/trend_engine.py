@@ -90,7 +90,7 @@ def compute_trend(cleaned: CleanedComps) -> TrendResult:
     if prev_count > 0:
         demand_trend = ((recent_count - prev_count) / prev_count) * 100
     elif recent_count > 0:
-        demand_trend = 100.0  # Todo es nuevo
+        demand_trend = 50.0  # Datos solo recientes, no comparable. Valor moderado.
     else:
         demand_trend = 0.0
 

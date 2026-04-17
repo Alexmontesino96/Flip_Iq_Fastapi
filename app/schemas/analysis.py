@@ -169,6 +169,7 @@ class ConditionAnalysisOut(BaseModel):
     raw_condition_total: int = 0      # Total de comps antes del filtro de condición
     condition_subset_count: int = 0         # Comps que matchean la condición pedida
     condition_subset_median: float | None = None  # Mediana del subset (cuando safety net activa)
+    condition_subset_pricing: dict | None = None  # Mini-pipeline: {count, median, profit, roi_pct, margin_pct, max_buy}
 
 
 class MarketplaceAnalysis(BaseModel):

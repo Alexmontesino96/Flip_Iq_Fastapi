@@ -451,3 +451,194 @@ def test_clean_keyword_nib():
     cleaned, cond = _clean_search_keyword("Nike Air Max 90 NIB")
     assert "nib" not in cleaned.lower()
     assert cond == "new"
+
+
+# --- P0: Condition subset pricing in pipeline ---
+
+def test_pipeline_condition_subset_pricing():
+    """Pipeline computa mini-pipeline de profit/max_buy sobre el condition subset."""
+    from app.services.analysis_service import _run_pipeline
+    from app.services.marketplace.base import MarketplaceListing
+    from datetime import datetime, timezone, timedelta
+
+    # 2 New a $225/$230, 8 Used a ~$200 → safety net activa (precios dentro de IQR)
+    listings = []
+    for i in range(8):
+        listings.append(MarketplaceListing(
+            title="Nintendo Switch OLED", price=195 + i * 3, total_price=195 + i * 3,
+            sold=True, marketplace="ebay", condition="Used",
+            seller_username=f"seller_{i}",
+            ended_at=datetime.now(timezone.utc) - timedelta(days=i + 1),
+        ))
+    listings.append(MarketplaceListing(
+        title="Nintendo Switch OLED", price=225, total_price=225,
+        sold=True, marketplace="ebay", condition="New",
+        seller_username="seller_new1",
+        ended_at=datetime.now(timezone.utc) - timedelta(days=2),
+    ))
+    listings.append(MarketplaceListing(
+        title="Nintendo Switch OLED", price=230, total_price=230,
+        sold=True, marketplace="ebay", condition="New",
+        seller_username="seller_new2",
+        ended_at=datetime.now(timezone.utc) - timedelta(days=3),
+    ))
+    comps = CompsResult.from_listings(listings, marketplace="ebay", days=30)
+
+    result = _run_pipeline(
+        comps, keyword="Nintendo Switch OLED", condition="new",
+        cost_price=160.0, marketplace_name="ebay",
+    )
+
+    # condition_subset_pricing debe existir
+    assert result.condition_subset_pricing is not None
+    csp = result.condition_subset_pricing
+    assert csp["count"] == 2
+    assert csp["median"] == 227.5  # (225+230)/2
+    assert csp["profit"] > 0  # Vendiendo a $227.5 con cost $160 → profit positivo
+    assert csp["roi_pct"] > 0
+    assert csp["max_buy"] > 0
+
+    # condition_analysis también lo tiene
+    assert result.condition_analysis.condition_subset_pricing is not None
+    assert result.condition_analysis.condition_subset_pricing["count"] == 2
+
+    # Warning debe incluir datos del subset pricing
+    condition_warnings = [w for w in result.warnings if "subset median" in w or "If selling as" in w]
+    assert len(condition_warnings) >= 1
+    assert any("est. profit" in w for w in condition_warnings)
+
+
+def test_pipeline_no_subset_pricing_when_filter_applied():
+    """Cuando el filtro de condición se aplica, no hay subset pricing."""
+    from app.services.analysis_service import _run_pipeline
+    from app.services.marketplace.base import MarketplaceListing
+    from datetime import datetime, timezone, timedelta
+
+    # 5 New, 2 Used → filtro se aplica (≥3 new)
+    listings = []
+    for i in range(5):
+        listings.append(MarketplaceListing(
+            title="Test item", price=100 + i, total_price=100 + i,
+            sold=True, marketplace="ebay", condition="New",
+            seller_username=f"seller_{i}",
+            ended_at=datetime.now(timezone.utc) - timedelta(days=i + 1),
+        ))
+    for i in range(2):
+        listings.append(MarketplaceListing(
+            title="Test item", price=80 + i, total_price=80 + i,
+            sold=True, marketplace="ebay", condition="Used",
+            seller_username=f"seller_u{i}",
+            ended_at=datetime.now(timezone.utc) - timedelta(days=i + 6),
+        ))
+    comps = CompsResult.from_listings(listings, marketplace="ebay", days=30)
+
+    result = _run_pipeline(
+        comps, keyword="test", condition="new",
+        cost_price=50.0, marketplace_name="ebay",
+    )
+
+    # Filtro aplicado → no hay subset pricing
+    assert result.condition_subset_pricing is None
+
+
+def test_validate_buy_condition_warning_includes_subset_profit():
+    """El warning de condition mismatch incluye datos de profit del subset."""
+    from app.services.engines.max_buy_price import MaxBuyResult
+
+    confidence = ConfidenceResult(score=60, category="medium", factors={})
+    title_risk = TitleRiskResult(
+        risk_score=0.0, flagged_listings=0, flagged_pct=0.0,
+        semantic_flags={}, manual_review_required=False,
+    )
+    cleaned = CleanedComps(
+        clean_total=10, raw_total=15, requested_condition="new",
+        condition_match_rate=0.2, condition_filtered=0,
+        median_price=200.0,
+        condition_subset_count=2, condition_subset_median=275.0,
+    )
+    profit = compute_profit(200.0, 160.0, "ebay")
+    max_buy = MaxBuyResult(max_by_profit=130.0, max_by_roi=120.0, recommended_max=130.0)
+    subset_pricing = {
+        "count": 2, "median": 275.0, "profit": 45.50,
+        "roi_pct": 28.4, "margin_pct": 16.5, "max_buy": 180.0,
+    }
+
+    rec, warnings = _validate_buy(
+        "buy", confidence, title_risk, cleaned, profit,
+        max_buy=max_buy, cost_price=160.0,
+        condition_subset_pricing=subset_pricing,
+    )
+
+    condition_warnings = [w for w in warnings if "If selling as" in w]
+    assert len(condition_warnings) == 1
+    assert "est. profit $45.50" in condition_warnings[0]
+    assert "ROI 28.4%" in condition_warnings[0]
+    assert "max buy $180.00" in condition_warnings[0]
+
+
+# --- P1: Product title condition noise ---
+
+def test_has_condition_noise():
+    """Detecta frases de condición en títulos de eBay."""
+    from app.services.analysis_service import _has_condition_noise
+    assert _has_condition_noise("Nintendo Switch OLED - 64GB - Game Console - Gray - Good Condition")
+    assert _has_condition_noise("iPhone 15 Pro Pre-Owned")
+    assert _has_condition_noise("Nike Vomero 6 Used")
+    assert _has_condition_noise("MacBook Air Like New")
+    assert _has_condition_noise("PS5 Refurbished")
+    assert not _has_condition_noise("Nintendo Switch OLED")
+    assert not _has_condition_noise("Nike Vomero 6")
+    assert not _has_condition_noise("iPhone 15 Pro Max 256GB")
+
+
+# --- P2: Demand spike threshold ---
+
+def test_trend_demand_50_when_all_recent():
+    """Cuando todos los datos están en los últimos 7 días, demand_trend = 50 (no 100)."""
+    from app.services.engines.trend_engine import compute_trend
+    from app.services.marketplace.base import MarketplaceListing
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+    listings = [
+        MarketplaceListing(
+            title="Test item", price=100, total_price=100, sold=True,
+            marketplace="ebay",
+            ended_at=now - timedelta(days=d),
+        )
+        for d in range(1, 6)  # solo últimos 5 días
+    ]
+    cleaned = CleanedComps(
+        clean_total=5, raw_total=5, days_of_data=30,
+        median_price=100, listings=listings,
+    )
+    trend = compute_trend(cleaned)
+    assert trend.demand_trend == 50.0  # no 100
+    assert trend.confidence == "low"  # prev_count=0
+
+
+def test_demand_spike_warning_suppressed_low_confidence():
+    """No muestra demand spike warning cuando confidence es low."""
+    from app.services.analysis_service import _run_pipeline
+    from app.services.marketplace.base import MarketplaceListing
+    from datetime import datetime, timezone, timedelta
+
+    # Todos los listings en los últimos 3 días → demand_trend=50, confidence=low
+    now = datetime.now(timezone.utc)
+    listings = [
+        MarketplaceListing(
+            title="Test item", price=100, total_price=100, sold=True,
+            marketplace="ebay", seller_username=f"seller_{i}",
+            ended_at=now - timedelta(days=d),
+        )
+        for i, d in enumerate([1, 1, 2, 2, 3, 3, 3, 3, 3, 3])
+    ]
+    comps = CompsResult.from_listings(listings, marketplace="ebay", days=30)
+
+    result = _run_pipeline(
+        comps, keyword="test", condition="any",
+        cost_price=50.0, marketplace_name="ebay",
+    )
+
+    # No debe haber warning de demand spike
+    assert not any("Demand spike" in w for w in result.warnings)
