@@ -265,6 +265,18 @@ def _parse_s_card_layout(cards) -> list[dict]:
                 if bids is not None:
                     break
 
+        # Location: buscar texto "Located in" en spans del card
+        item_location = None
+        for el in card.select("span.su-styled-text"):
+            text = el.get_text(strip=True)
+            if text.startswith("Located in"):
+                item_location = text.replace("Located in", "").strip().rstrip(":")
+                break
+
+        # Filtrar items internacionales — solo mantener US o desconocido
+        if item_location and "United States" not in item_location:
+            continue
+
         # Seller: span.su-styled-text.primary.large (primero es username, segundo feedback)
         # Excluir frases comunes que no son sellers: "with coupon", "X% off", etc.
         _NOT_SELLER = {"with coupon", "or best offer", "buy it now", "best offer accepted"}
@@ -296,6 +308,7 @@ def _parse_s_card_layout(cards) -> list[dict]:
             "sellerUsername": seller_username,
             "url": url,
             "itemId": item_id,
+            "itemLocation": item_location,
         })
 
     return results
@@ -351,6 +364,16 @@ def _parse_s_item_layout(items) -> list[dict]:
         bids_el = item.select_one(".s-item__bidCount")
         bids = _parse_bids(bids_el.get_text() if bids_el else None)
 
+        # Location en legacy layout: .s-item__location
+        location_el = item.select_one(".s-item__location")
+        item_location = None
+        if location_el:
+            loc_text = location_el.get_text(strip=True)
+            item_location = loc_text.replace("from", "").strip()
+            # Filtrar items internacionales
+            if item_location and "United States" not in item_location:
+                continue
+
         seller_el = item.select_one("span.s-item__seller-info-text")
         seller_username = _extract_seller(seller_el.get_text() if seller_el else None)
 
@@ -365,6 +388,7 @@ def _parse_s_item_layout(items) -> list[dict]:
             "sellerUsername": seller_username,
             "url": url,
             "itemId": item_id,
+            "itemLocation": item_location,
         })
 
     return results
@@ -422,7 +446,7 @@ async def scrape_sold_listings(
                 "_nkw": _build_search_query(keyword, exclude_terms),
                 "LH_Sold": "1",
                 "LH_Complete": "1",
-                "LH_PrefLoc": "1",   # US-only sellers → prices always in USD
+                "LH_PrefLoc": "2",   # US-only item location
                 "_ipg": str(items_per_page),
                 "_sop": "13",        # ended recently first
                 "rt": "nc",          # no cache

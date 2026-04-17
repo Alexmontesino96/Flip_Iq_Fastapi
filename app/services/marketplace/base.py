@@ -28,6 +28,7 @@ class MarketplaceListing:
     item_specifics: dict | None = None
     quantity_sold: int | None = None
     bids: int | None = None
+    item_location: str | None = None
     # Bundle detection (del LLM enrichment)
     is_bundle: bool = False
     lot_size: int = 1

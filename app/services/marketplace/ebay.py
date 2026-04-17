@@ -75,6 +75,7 @@ def _map_listing(item: dict) -> MarketplaceListing | None:
         seller_feedback_pct=item.get("sellerFeedbackPercent"),
         condition=item.get("condition"),
         bids=item.get("bids"),
+        item_location=item.get("itemLocation"),
         quantity_sold=item.get("quantitySold"),
         brand=item.get("brand"),
         model=item.get("model"),

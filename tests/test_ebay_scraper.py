@@ -762,6 +762,192 @@ class TestEbayClientFallback:
         assert call_kwargs.kwargs.get("category_id") is None
 
 
+# ── Tests de filtrado de ubicación internacional ──
+
+
+# Fixture s-card con items internacionales y US
+EBAY_SCARD_LOCATION_HTML = """
+<html>
+<body>
+<div class="srp-river-results">
+  <ul class="srp-results srp-list clearfix">
+
+    <!-- US item: debe pasar -->
+    <li class="s-card s-card--horizontal" data-listingid="111111111">
+      <div class="su-card-container su-card-container--horizontal">
+        <div class="su-card-container__content">
+          <div class="su-card-container__header">
+            <a class="s-card__link" href="https://www.ebay.com/itm/111111111">
+              <span class="su-styled-text primary default">ASICS Gel-Nimbus 28 US Seller</span>
+            </a>
+          </div>
+          <div class="su-card-container__body">
+            <span class="su-styled-text positive bold large-1 s-card__price">$99.99</span>
+            <span class="su-styled-text secondary large">Free delivery</span>
+            <span class="su-styled-text secondary default">Located in United States</span>
+          </div>
+        </div>
+      </div>
+    </li>
+
+    <!-- Japan item: debe ser filtrado -->
+    <li class="s-card s-card--horizontal" data-listingid="222222222">
+      <div class="su-card-container su-card-container--horizontal">
+        <div class="su-card-container__content">
+          <div class="su-card-container__header">
+            <a class="s-card__link" href="https://www.ebay.com/itm/222222222">
+              <span class="su-styled-text primary default">ASICS Gel-Nimbus 28 Japan Import</span>
+            </a>
+          </div>
+          <div class="su-card-container__body">
+            <span class="su-styled-text positive bold large-1 s-card__price">$167.00</span>
+            <span class="su-styled-text secondary large">+$40.00 delivery</span>
+            <span class="su-styled-text secondary default">Located in Japan</span>
+          </div>
+        </div>
+      </div>
+    </li>
+
+    <!-- No location: debe pasar (desconocido = permitido) -->
+    <li class="s-card s-card--horizontal" data-listingid="333333333">
+      <div class="su-card-container su-card-container--horizontal">
+        <div class="su-card-container__content">
+          <div class="su-card-container__header">
+            <a class="s-card__link" href="https://www.ebay.com/itm/333333333">
+              <span class="su-styled-text primary default">ASICS Gel-Nimbus 28 No Location</span>
+            </a>
+          </div>
+          <div class="su-card-container__body">
+            <span class="su-styled-text positive bold large-1 s-card__price">$109.00</span>
+            <span class="su-styled-text secondary large">Free delivery</span>
+          </div>
+        </div>
+      </div>
+    </li>
+
+    <!-- Brazil item: debe ser filtrado -->
+    <li class="s-card s-card--horizontal" data-listingid="444444444">
+      <div class="su-card-container su-card-container--horizontal">
+        <div class="su-card-container__content">
+          <div class="su-card-container__header">
+            <a class="s-card__link" href="https://www.ebay.com/itm/444444444">
+              <span class="su-styled-text primary default">ASICS Gel-Nimbus 28 Brazil</span>
+            </a>
+          </div>
+          <div class="su-card-container__body">
+            <span class="su-styled-text positive bold large-1 s-card__price">$189.00</span>
+            <span class="su-styled-text secondary large">+$36.00 delivery</span>
+            <span class="su-styled-text secondary default">Located in Brazil</span>
+          </div>
+        </div>
+      </div>
+    </li>
+
+  </ul>
+</div>
+</body>
+</html>
+"""
+
+# Fixture s-item (legacy) con items internacionales y US
+EBAY_SITEM_LOCATION_HTML = """
+<html>
+<body>
+<div class="srp-results">
+  <ul class="srp-results srp-list clearfix">
+
+    <li class="s-item">
+      <div class="s-item__wrapper">
+        <div class="s-item__info">
+          <a class="s-item__link" href="https://www.ebay.com/itm/111111111">
+            <h3 class="s-item__title">ASICS Gel-Nimbus 28 US Seller</h3>
+          </a>
+          <span class="s-item__price">$99.99</span>
+          <span class="s-item__logisticsCost">Free shipping</span>
+          <span class="s-item__location">from United States</span>
+        </div>
+      </div>
+    </li>
+
+    <li class="s-item">
+      <div class="s-item__wrapper">
+        <div class="s-item__info">
+          <a class="s-item__link" href="https://www.ebay.com/itm/222222222">
+            <h3 class="s-item__title">ASICS Gel-Nimbus 28 Japan Import</h3>
+          </a>
+          <span class="s-item__price">$167.00</span>
+          <span class="s-item__logisticsCost">+$40.00 shipping</span>
+          <span class="s-item__location">from Japan</span>
+        </div>
+      </div>
+    </li>
+
+    <li class="s-item">
+      <div class="s-item__wrapper">
+        <div class="s-item__info">
+          <a class="s-item__link" href="https://www.ebay.com/itm/333333333">
+            <h3 class="s-item__title">ASICS Gel-Nimbus 28 No Location</h3>
+          </a>
+          <span class="s-item__price">$109.00</span>
+          <span class="s-item__logisticsCost">Free shipping</span>
+        </div>
+      </div>
+    </li>
+
+  </ul>
+</div>
+</body>
+</html>
+"""
+
+
+class TestLocationFilteringSCard:
+    """Tests de filtrado de ubicación internacional en layout s-card."""
+
+    def test_filters_international_items(self):
+        results = parse_sold_listings(EBAY_SCARD_LOCATION_HTML)
+        titles = [r["title"] for r in results]
+        # US y sin location pasan, Japan y Brazil filtrados
+        assert len(results) == 2
+        assert "ASICS Gel-Nimbus 28 US Seller" in titles
+        assert "ASICS Gel-Nimbus 28 No Location" in titles
+        assert "ASICS Gel-Nimbus 28 Japan Import" not in titles
+        assert "ASICS Gel-Nimbus 28 Brazil" not in titles
+
+    def test_us_item_has_location(self):
+        results = parse_sold_listings(EBAY_SCARD_LOCATION_HTML)
+        us_item = [r for r in results if "US Seller" in r["title"]][0]
+        assert us_item["itemLocation"] == "United States"
+
+    def test_no_location_item_has_none(self):
+        results = parse_sold_listings(EBAY_SCARD_LOCATION_HTML)
+        no_loc = [r for r in results if "No Location" in r["title"]][0]
+        assert no_loc["itemLocation"] is None
+
+
+class TestLocationFilteringSItem:
+    """Tests de filtrado de ubicación internacional en layout legacy s-item."""
+
+    def test_filters_international_items(self):
+        results = parse_sold_listings(EBAY_SITEM_LOCATION_HTML)
+        titles = [r["title"] for r in results]
+        # US y sin location pasan, Japan filtrado
+        assert len(results) == 2
+        assert "ASICS Gel-Nimbus 28 US Seller" in titles
+        assert "ASICS Gel-Nimbus 28 No Location" in titles
+        assert "ASICS Gel-Nimbus 28 Japan Import" not in titles
+
+    def test_us_item_has_location(self):
+        results = parse_sold_listings(EBAY_SITEM_LOCATION_HTML)
+        us_item = [r for r in results if "US Seller" in r["title"]][0]
+        assert us_item["itemLocation"] == "United States"
+
+    def test_no_location_item_has_none(self):
+        results = parse_sold_listings(EBAY_SITEM_LOCATION_HTML)
+        no_loc = [r for r in results if "No Location" in r["title"]][0]
+        assert no_loc["itemLocation"] is None
+
+
 # ── Tests de Smart Query Building ──
 
 
