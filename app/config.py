@@ -65,9 +65,6 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     brave_search_api_key: str = ""
 
-    # Reranker (Cohere vía OpenRouter)
-    openrouter_api_key: str = ""
-
     model_config = {"env_file": ".env", "extra": "ignore"}
 
     @model_validator(mode="after")

@@ -346,9 +346,8 @@ def clean_comps(
     outliers_removed = len(priced) - len(after_outliers)
 
     # 2.5. Filtrar por product_type (si se proporcionó)
-    # Saltar si el reranker semántico ya filtró (raw.reranked)
     product_type_filtered = 0
-    if product_type and after_outliers and not raw.reranked:
+    if product_type and after_outliers:
         matched_pt = [
             l for l in after_outliers
             if _matches_product_type(l.title or "", product_type, keyword)
@@ -418,10 +417,9 @@ def clean_comps(
                 after_outliers = filtered
 
     # 4. Filtrar por relevancia si hay datos enriquecidos (LLM o detailedSearch)
-    # Saltar si el reranker semántico ya filtró (raw.reranked)
     relevance_filtered = 0
     has_enriched = any(l.brand or l.model for l in after_outliers)
-    if has_enriched and keyword and not raw.reranked:
+    if has_enriched and keyword:
         relevant = []
         for l in after_outliers:
             score = _compute_relevance(l, keyword)
