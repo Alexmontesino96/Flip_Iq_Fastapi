@@ -736,9 +736,11 @@ class TestBuildSearchQuery:
         assert result == "PS5 -broken -parts"
 
     def test_all_exclusions_in_keyword(self):
-        """Si todos los términos de exclusión están en el keyword, retorna keyword limpio."""
-        result = _build_search_query("lot bundle wholesale bulk broken defective junk salvage")
-        assert result == "lot bundle wholesale bulk broken defective junk salvage"
+        """Si todos los términos de exclusión están en el keyword, no se excluyen."""
+        from app.services.marketplace.ebay_scraper import _DEFAULT_EXCLUSIONS
+        kw = " ".join(_DEFAULT_EXCLUSIONS)
+        result = _build_search_query(kw)
+        assert result == kw
 
     def test_case_insensitive(self):
         result = _build_search_query("BULK wholesale items")

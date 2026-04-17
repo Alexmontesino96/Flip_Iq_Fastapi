@@ -35,6 +35,13 @@ SCRAPER_TIMEOUT = 20  # segundos
 _DEFAULT_EXCLUSIONS = [
     "lot", "bundle", "wholesale", "bulk",
     "broken", "defective", "junk", "salvage",
+    # Accessory exclusions — prevents eBay from returning accessories
+    # that match the keyword (e.g. "case for Nintendo Switch OLED").
+    # Terms present in the user's keyword are automatically kept by _build_search_query.
+    "case", "cover", "protector", "skin",
+    "charger", "cable", "adapter",
+    "stand", "mount", "holder",
+    "strap", "decal", "replacement",
 ]
 
 _EBAY_CONDITION_IDS = {

@@ -80,6 +80,21 @@ def _normalize_price(listing: MarketplaceListing) -> float:
     return base
 
 
+# Words that indicate a listing is an accessory, not the main product.
+# Used by _matches_product_type to reject titles like "Screen Protector for Switch OLED"
+# even when they contain all keyword words.
+_ACCESSORY_WORDS = frozenset({
+    "case", "cover", "skin", "sleeve", "pouch", "bag",
+    "protector", "film", "guard", "tempered", "shield",
+    "shell", "bumper", "faceplate",
+    "charger", "cable", "cord", "adapter", "wire",
+    "stand", "mount", "holder", "cradle",
+    "strap", "decal", "sticker", "wrap",
+    "stylus", "pen", "cloth", "cleaning",
+    "carrying", "travel",
+    "replacement", "repair", "spare",
+})
+
 _MODEL_CONTEXT_PREFIXES = frozenset({
     "size", "sz", "us", "uk", "eu", "pack", "lot", "set", "x", "qty", "quantity", "count",
     "mens", "womens", "men", "women", "gs", "youth", "grade", "jr", "junior",
@@ -222,12 +237,18 @@ def _matches_product_type(title: str, product_type: str, keyword: str | None = N
     if any(re.search(r"\b" + re.escape(v) + r"\b", title_lower) for v in variants):
         return True
 
-    # Fallback: si el título contiene TODAS las palabras significativas del keyword,
-    # es muy probable que sea el producto correcto aunque no diga el product_type.
+    # Fallback: si el título contiene TODAS las palabras significativas del keyword
+    # Y NO contiene palabras que indiquen que es un accesorio.
+    # Ej: "Nintendo Switch OLED 64GB" → True (no dice "console" pero es el producto)
+    # Ej: "Nintendo Switch OLED Screen Protector" → False ("protector" = accesorio)
     if keyword:
         kw_words = [w for w in keyword.lower().split() if len(w) >= 3]
         if kw_words and all(w in title_lower for w in kw_words):
-            return True
+            kw_word_set = set(keyword.lower().split())
+            title_words = set(re.findall(r"\b\w+\b", title_lower))
+            extra_words = title_words - kw_word_set
+            if not (extra_words & _ACCESSORY_WORDS):
+                return True
 
     return False
 
@@ -328,7 +349,21 @@ def clean_comps(
             condition_match_rate=no_match_rate,
         )
 
-    # 2. Filtrar outliers con IQR Tukey
+    # 2. Filtrar por product_type ANTES de IQR (si se proporcionó).
+    # Esto evita que IQR calcule bounds sobre productos mixtos (ej: consolas + accesorios)
+    # donde los productos reales serían removidos como "outliers".
+    product_type_filtered = 0
+    if product_type and priced:
+        matched_pt = [
+            l for l in priced
+            if _matches_product_type(l.title or "", product_type, keyword)
+        ]
+        min_keep = max(3, int(len(priced) * 0.2))
+        if len(matched_pt) >= min_keep:
+            product_type_filtered = len(priced) - len(matched_pt)
+            priced = matched_pt
+
+    # 3. Filtrar outliers con IQR Tukey (ahora sobre items del mismo tipo)
     prices = sorted(l.total_price for l in priced)
     n = len(prices)
     p25_idx = max(0, int(n * 0.25) - 1) if n >= 4 else 0
@@ -344,19 +379,6 @@ def clean_comps(
         l for l in priced if lower_bound <= l.total_price <= upper_bound
     ]
     outliers_removed = len(priced) - len(after_outliers)
-
-    # 2.5. Filtrar por product_type (si se proporcionó)
-    product_type_filtered = 0
-    if product_type and after_outliers:
-        matched_pt = [
-            l for l in after_outliers
-            if _matches_product_type(l.title or "", product_type, keyword)
-        ]
-        # Safety net: no filtrar si quedarían menos del 40% de los comps
-        min_keep = max(3, int(len(after_outliers) * 0.4))
-        if len(matched_pt) >= min_keep:
-            product_type_filtered = len(after_outliers) - len(matched_pt)
-            after_outliers = matched_pt
 
     # 2.6. Safety net: filtrar listings con danger patterns de alto peso
     danger_filtered = 0
