@@ -1,6 +1,8 @@
-"""Scraper directo de eBay sold listings con httpx + BeautifulSoup.
+"""Scraper directo de eBay sold listings con curl_cffi + BeautifulSoup.
 
 Reemplaza Apify para eliminar costos por resultado.
+Usa curl_cffi con impersonate="chrome" para replicar el TLS fingerprint
+de Chrome y evitar detección por Cloudflare/eBay.
 Retorna dicts con el mismo formato que el actor de Apify.
 """
 
@@ -9,7 +11,11 @@ import random
 import re
 from datetime import datetime, timezone
 
-import httpx
+from curl_cffi.requests import AsyncSession
+from curl_cffi.requests.exceptions import RequestException  # noqa: F401
+from curl_cffi.requests.exceptions import HTTPError  # noqa: F401
+from curl_cffi.requests.exceptions import Timeout  # noqa: F401
+
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
@@ -25,6 +31,32 @@ USER_AGENTS = [
 ]
 
 SCRAPER_TIMEOUT = 20  # segundos
+
+_DEFAULT_EXCLUSIONS = [
+    "lot", "bundle", "wholesale", "bulk",
+    "broken", "defective", "junk", "salvage",
+]
+
+_EBAY_CONDITION_IDS = {
+    "new": "1000|1500|1750",
+    "used": "3000|4000|5000|6000",
+    "refurbished": "2000|2010|2020|2030|2500",
+    "open_box": "1500",
+    "for_parts": "7000",
+}
+
+
+def _build_search_query(keyword: str, exclude_terms: list[str] | None = None) -> str:
+    """Agrega exclusiones a la query para filtrar basura desde eBay.
+
+    Solo excluye términos que NO aparecen en el keyword del usuario.
+    """
+    kw_lower = keyword.lower()
+    exclusions = _DEFAULT_EXCLUSIONS if exclude_terms is None else exclude_terms
+    safe = [t for t in exclusions if t.lower() not in kw_lower]
+    if safe:
+        return keyword + " " + " ".join(f"-{t}" for t in safe)
+    return keyword
 
 
 def _get_headers() -> dict[str, str]:
@@ -325,7 +357,11 @@ def _parse_s_item_layout(items) -> list[dict]:
 
 
 async def scrape_sold_listings(
-    keyword: str, limit: int = 50, proxy_url: str | None = None,
+    keyword: str,
+    limit: int = 50,
+    proxy_url: str | None = None,
+    condition: str | None = None,
+    exclude_terms: list[str] | None = None,
 ) -> list[dict]:
     """Scraper directo a eBay sold listings.
 
@@ -334,13 +370,15 @@ async def scrape_sold_listings(
         limit: Máximo de resultados a retornar.
         proxy_url: URL de proxy residencial (http://user:pass@host:port).
                    Si se pasa, cada request sale por IP residencial rotativa.
+        condition: Filtro de condición para eBay (new, used, refurbished, etc.).
+        exclude_terms: Términos a excluir de la búsqueda. Si None, usa defaults.
 
     Returns:
         Lista de dicts con formato compatible con Apify.
 
     Raises:
-        httpx.HTTPStatusError: Si eBay responde con error (429, 503, etc).
-        httpx.TimeoutException: Si la conexión se agota.
+        HTTPError: Si eBay responde con error (429, 503, etc).
+        Timeout: Si la conexión se agota.
     """
     results: list[dict] = []
     items_per_page = 240
@@ -349,19 +387,25 @@ async def scrape_sold_listings(
 
     client_kwargs: dict = {
         "timeout": SCRAPER_TIMEOUT,
-        "follow_redirects": True,
+        "allow_redirects": True,
+        "impersonate": "chrome",
     }
     if proxy_url:
         client_kwargs["proxy"] = proxy_url
 
-    async with httpx.AsyncClient(**client_kwargs) as client:
+    async with AsyncSession(**client_kwargs) as client:
         while len(results) < limit and page <= max_pages:
             params = {
-                "_nkw": keyword,
+                "_nkw": _build_search_query(keyword, exclude_terms),
                 "LH_Sold": "1",
                 "LH_Complete": "1",
+                "LH_PrefLoc": "1",   # US-only sellers → prices always in USD
                 "_ipg": str(items_per_page),
+                "_sop": "13",        # ended recently first
+                "rt": "nc",          # no cache
             }
+            if condition and condition in _EBAY_CONDITION_IDS:
+                params["LH_ItemCondition"] = _EBAY_CONDITION_IDS[condition]
             if page > 1:
                 params["_pgn"] = str(page)
 

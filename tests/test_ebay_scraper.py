@@ -2,10 +2,12 @@
 
 from unittest.mock import AsyncMock, patch, MagicMock
 
-import httpx
 import pytest
+from curl_cffi.requests.exceptions import HTTPError, Timeout
 
 from app.services.marketplace.ebay_scraper import (
+    _build_search_query,
+    _EBAY_CONDITION_IDS,
     _extract_item_id,
     _extract_seller,
     _parse_bids,
@@ -473,7 +475,7 @@ class TestScrapeSoldListings:
         mock_response.text = EBAY_SCARD_HTML_FIXTURE
         mock_response.raise_for_status = MagicMock()
 
-        with patch("app.services.marketplace.ebay_scraper.httpx.AsyncClient") as mock_client_cls:
+        with patch("app.services.marketplace.ebay_scraper.AsyncSession") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_response)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -492,7 +494,7 @@ class TestScrapeSoldListings:
         mock_response.text = EBAY_SCARD_HTML_FIXTURE
         mock_response.raise_for_status = MagicMock()
 
-        with patch("app.services.marketplace.ebay_scraper.httpx.AsyncClient") as mock_client_cls:
+        with patch("app.services.marketplace.ebay_scraper.AsyncSession") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_response)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -508,33 +510,29 @@ class TestScrapeSoldListings:
         mock_response = MagicMock()
         mock_response.status_code = 429
         mock_response.raise_for_status = MagicMock(
-            side_effect=httpx.HTTPStatusError(
-                "429 Too Many Requests",
-                request=MagicMock(),
-                response=mock_response,
-            )
+            side_effect=HTTPError("429 Too Many Requests")
         )
 
-        with patch("app.services.marketplace.ebay_scraper.httpx.AsyncClient") as mock_client_cls:
+        with patch("app.services.marketplace.ebay_scraper.AsyncSession") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_response)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
             mock_client_cls.return_value = mock_client
 
-            with pytest.raises(httpx.HTTPStatusError):
+            with pytest.raises(HTTPError):
                 await scrape_sold_listings("iPhone 15 Pro")
 
     @pytest.mark.asyncio
     async def test_timeout_propagates(self):
-        with patch("app.services.marketplace.ebay_scraper.httpx.AsyncClient") as mock_client_cls:
+        with patch("app.services.marketplace.ebay_scraper.AsyncSession") as mock_client_cls:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
+            mock_client.get = AsyncMock(side_effect=Timeout("timeout"))
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
             mock_client_cls.return_value = mock_client
 
-            with pytest.raises(httpx.TimeoutException):
+            with pytest.raises(Timeout):
                 await scrape_sold_listings("iPhone 15 Pro")
 
     @pytest.mark.asyncio
@@ -545,7 +543,7 @@ class TestScrapeSoldListings:
         mock_response.text = "<html><body><ul class='srp-results'></ul></body></html>"
         mock_response.raise_for_status = MagicMock()
 
-        with patch("app.services.marketplace.ebay_scraper.httpx.AsyncClient") as mock_client_cls:
+        with patch("app.services.marketplace.ebay_scraper.AsyncSession") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_response)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -587,7 +585,7 @@ class TestEbayClientFallback:
 
         with patch(
             "app.services.marketplace.ebay.scrape_sold_listings",
-            side_effect=httpx.HTTPStatusError("429", request=MagicMock(), response=MagicMock(status_code=429)),
+            side_effect=HTTPError("429 Too Many Requests"),
         ), patch.object(
             client, "_fetch_via_apify", new_callable=AsyncMock, return_value=apify_data,
         ):
@@ -664,3 +662,200 @@ class TestEbayClientFallback:
         result = await client.get_sold_comps()
         assert result.total_sold == 0
         assert result.listings == []
+
+    @pytest.mark.asyncio
+    async def test_condition_propagated_to_scraper(self):
+        """get_sold_comps(condition=X) pasa condition a scrape_sold_listings."""
+        from app.services.marketplace.ebay import EbayClient
+
+        client = EbayClient()
+        client._data_source = "scraper"
+        client._token = None
+
+        scraper_data = [
+            {"title": f"iPhone {i}", "soldPrice": "800.00", "shippingPrice": "0", "totalPrice": "800.00"}
+            for i in range(10)
+        ]
+
+        with patch(
+            "app.services.marketplace.ebay.scrape_sold_listings",
+            new_callable=AsyncMock,
+            return_value=scraper_data,
+        ) as mock_scraper:
+            await client.get_sold_comps(keyword="iPhone", condition="new")
+
+        mock_scraper.assert_called_once()
+        call_kwargs = mock_scraper.call_args
+        assert call_kwargs.kwargs.get("condition") == "new"
+
+    @pytest.mark.asyncio
+    async def test_condition_any_not_propagated(self):
+        """condition='any' no se pasa al scraper (queda None)."""
+        from app.services.marketplace.ebay import EbayClient
+
+        client = EbayClient()
+        client._data_source = "scraper"
+        client._token = None
+
+        scraper_data = [
+            {"title": f"iPhone {i}", "soldPrice": "800.00", "totalPrice": "800.00"}
+            for i in range(10)
+        ]
+
+        with patch(
+            "app.services.marketplace.ebay.scrape_sold_listings",
+            new_callable=AsyncMock,
+            return_value=scraper_data,
+        ) as mock_scraper:
+            await client.get_sold_comps(keyword="iPhone", condition="any")
+
+        call_kwargs = mock_scraper.call_args
+        assert call_kwargs.kwargs.get("condition") is None
+
+
+# ── Tests de Smart Query Building ──
+
+
+class TestBuildSearchQuery:
+    def test_default_exclusions_added(self):
+        result = _build_search_query("iPhone 15 Pro")
+        assert "iPhone 15 Pro" in result
+        assert "-lot" in result
+        assert "-bundle" in result
+        assert "-broken" in result
+
+    def test_keyword_term_not_excluded(self):
+        """Si el keyword contiene un término de exclusión, no se excluye."""
+        result = _build_search_query("iPhone lot of 5")
+        assert "-lot" not in result
+        # Otros sí
+        assert "-bundle" in result
+
+    def test_custom_exclusions(self):
+        result = _build_search_query("PS5", exclude_terms=["broken", "parts"])
+        assert result == "PS5 -broken -parts"
+
+    def test_all_exclusions_in_keyword(self):
+        """Si todos los términos de exclusión están en el keyword, retorna keyword limpio."""
+        result = _build_search_query("lot bundle wholesale bulk broken defective junk salvage")
+        assert result == "lot bundle wholesale bulk broken defective junk salvage"
+
+    def test_case_insensitive(self):
+        result = _build_search_query("BULK wholesale items")
+        assert "-bulk" not in result
+        assert "-wholesale" not in result
+        assert "-lot" in result
+
+    def test_empty_custom_exclusions(self):
+        result = _build_search_query("iPhone", exclude_terms=[])
+        assert result == "iPhone"
+
+
+class TestScrapeSoldListingsConditionParams:
+    @pytest.mark.asyncio
+    async def test_condition_new_adds_item_condition_param(self):
+        """condition='new' agrega LH_ItemCondition a la URL."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = EBAY_SCARD_HTML_FIXTURE
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("app.services.marketplace.ebay_scraper.AsyncSession") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await scrape_sold_listings("iPhone 15 Pro", condition="new")
+
+        call_kwargs = mock_client.get.call_args
+        params = call_kwargs.kwargs.get("params") or call_kwargs[1].get("params")
+        assert params["LH_ItemCondition"] == _EBAY_CONDITION_IDS["new"]
+        assert params["_sop"] == "13"
+        assert params["rt"] == "nc"
+
+    @pytest.mark.asyncio
+    async def test_condition_used_adds_item_condition_param(self):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = EBAY_SCARD_HTML_FIXTURE
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("app.services.marketplace.ebay_scraper.AsyncSession") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await scrape_sold_listings("iPhone 15 Pro", condition="used")
+
+        call_kwargs = mock_client.get.call_args
+        params = call_kwargs.kwargs.get("params") or call_kwargs[1].get("params")
+        assert params["LH_ItemCondition"] == _EBAY_CONDITION_IDS["used"]
+
+    @pytest.mark.asyncio
+    async def test_no_condition_no_item_condition_param(self):
+        """Sin condition, no agrega LH_ItemCondition."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = EBAY_SCARD_HTML_FIXTURE
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("app.services.marketplace.ebay_scraper.AsyncSession") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await scrape_sold_listings("iPhone 15 Pro")
+
+        call_kwargs = mock_client.get.call_args
+        params = call_kwargs.kwargs.get("params") or call_kwargs[1].get("params")
+        assert "LH_ItemCondition" not in params
+
+    @pytest.mark.asyncio
+    async def test_invalid_condition_ignored(self):
+        """Condición inválida no agrega LH_ItemCondition."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = EBAY_SCARD_HTML_FIXTURE
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("app.services.marketplace.ebay_scraper.AsyncSession") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await scrape_sold_listings("iPhone 15 Pro", condition="mint")
+
+        call_kwargs = mock_client.get.call_args
+        params = call_kwargs.kwargs.get("params") or call_kwargs[1].get("params")
+        assert "LH_ItemCondition" not in params
+
+    @pytest.mark.asyncio
+    async def test_query_has_exclusions(self):
+        """La query enviada a eBay incluye exclusiones por defecto."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = EBAY_SCARD_HTML_FIXTURE
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("app.services.marketplace.ebay_scraper.AsyncSession") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await scrape_sold_listings("iPhone 15 Pro")
+
+        call_kwargs = mock_client.get.call_args
+        params = call_kwargs.kwargs.get("params") or call_kwargs[1].get("params")
+        nkw = params["_nkw"]
+        assert "-lot" in nkw
+        assert "-bundle" in nkw

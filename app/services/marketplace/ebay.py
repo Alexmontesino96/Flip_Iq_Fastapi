@@ -1,6 +1,6 @@
 """Cliente eBay: scraper directo (default) con fallback a Apify.
 
-Usa scraper propio (httpx + BeautifulSoup) para obtener ventas completadas de eBay.
+Usa scraper propio (curl_cffi + BeautifulSoup) para obtener ventas completadas de eBay.
 Si el scraper falla (429, CAPTCHA, etc.), cae a Apify como fallback si hay token.
 Configurable via EBAY_DATA_SOURCE env var: "scraper" (default) | "apify" | "rpi".
 """
@@ -158,11 +158,14 @@ class EbayClient(MarketplaceClient):
             limit: Máximo de resultados.
             min_price: Filtro de precio mínimo (se filtra post).
             max_price: Filtro de precio máximo (se filtra post).
-            condition: Ignorado (se filtra en comp_cleaner).
+            condition: Filtro de condición (new, used, refurbished, etc.). "any" = sin filtro.
         """
         query = barcode or keyword
         if not query:
             return CompsResult(marketplace="ebay")
+
+        # Normalizar: "any" → None para el scraper (sin filtro de condición en URL)
+        cond = condition if condition and condition != "any" else None
 
         data: list[dict] | None = None
 
@@ -170,12 +173,12 @@ class EbayClient(MarketplaceClient):
             data = await self._fetch_via_rpi(query, limit)
             if data is None:
                 logger.info("RPi proxy falló, intentando scraper directo para '%s'", query)
-                data = await self._fetch_via_scraper(query, limit)
+                data = await self._fetch_via_scraper(query, limit, condition=cond)
             if data is None and self._token:
                 logger.info("Scraper directo falló, intentando Apify para '%s'", query)
                 data = await self._fetch_via_apify(query, limit)
         elif self._data_source == "scraper":
-            data = await self._fetch_via_scraper(query, limit)
+            data = await self._fetch_via_scraper(query, limit, condition=cond)
             if data is None and self._token:
                 logger.info("Scraper falló, intentando fallback a Apify para '%s'", query)
                 data = await self._fetch_via_apify(query, limit)
@@ -238,7 +241,9 @@ class EbayClient(MarketplaceClient):
         logger.warning("Todos los RPi proxies fallaron para '%s'", query)
         return None
 
-    async def _fetch_via_scraper(self, query: str, limit: int) -> list[dict] | None:
+    async def _fetch_via_scraper(
+        self, query: str, limit: int, condition: str | None = None,
+    ) -> list[dict] | None:
         """Intenta obtener datos via scraper directo. Usa proxy residencial si está configurado.
 
         Reintenta UNA vez si obtiene resultados pero muy pocos (< 5),
@@ -246,23 +251,25 @@ class EbayClient(MarketplaceClient):
         """
         for attempt in range(2):
             try:
-                data = await scrape_sold_listings(query, limit=limit, proxy_url=self._proxy_url)
+                data = await scrape_sold_listings(
+                    query, limit=limit, proxy_url=self._proxy_url,
+                    condition=condition,
+                )
                 if data and (len(data) >= 5 or attempt == 1):
                     return data
                 if not data:
                     logger.warning("Scraper retornó 0 resultados para '%s'", query)
                     return None
                 logger.info("Scraper retornó solo %d resultados para '%s', reintentando", len(data), query)
-            except httpx.HTTPStatusError as e:
-                logger.warning("Scraper HTTP error %s para '%s'", e.response.status_code, query)
-                return None
-            except httpx.TimeoutException:
-                logger.warning("Scraper timeout para '%s'", query)
-                if attempt == 0:
-                    continue
-                return None
             except Exception as e:
-                logger.warning("Scraper error para '%s': %s", query, e)
+                # curl_cffi exceptions: HTTPError, Timeout, RequestException
+                exc_name = type(e).__name__
+                if exc_name == "Timeout":
+                    logger.warning("Scraper timeout para '%s'", query)
+                    if attempt == 0:
+                        continue
+                    return None
+                logger.warning("Scraper error (%s) para '%s': %s", exc_name, query, e)
                 return None
         return None
 

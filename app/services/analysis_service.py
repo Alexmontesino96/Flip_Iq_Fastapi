@@ -668,7 +668,7 @@ async def run_analysis(
     ebay = _get_ebay_client()
     ebay_coro = ebay.get_sold_comps(
         barcode=barcode, keyword=search_keyword, days=30, limit=50,
-        condition="any",
+        condition=condition,
     )
 
     amazon_raw: CompsResult | None = None
@@ -694,7 +694,7 @@ async def run_analysis(
         logger.info("eBay barcode sin resultados, reintentando con keyword='%s'", search_keyword)
         try:
             ebay_raw = await ebay.get_sold_comps(
-                keyword=search_keyword, days=30, limit=50, condition="any",
+                keyword=search_keyword, days=30, limit=50, condition=condition,
             )
         except Exception as e:
             logger.warning("eBay keyword fallback failed: %s", e)
@@ -736,6 +736,47 @@ async def run_analysis(
     ebay_pipeline = _run_pipeline(
         ebay_raw, marketplace_name="ebay", enriched=ebay_enriched, **pipeline_kwargs,
     )
+
+    # -----------------------------------------------------------------------
+    # 3b. Re-fetch eBay si pocos comps limpios (buscar más páginas)
+    # -----------------------------------------------------------------------
+    _MIN_CLEAN_COMPS = 15
+    _REFETCH_LIMIT = 150  # 150 items → scraper pide página 1 completa (240)
+    if (
+        ebay_pipeline.cleaned.clean_total < _MIN_CLEAN_COMPS
+        and search_keyword
+        and ebay_pipeline.cleaned.clean_total > 0  # al menos algo encontró
+    ):
+        logger.info(
+            "Solo %d comps limpios eBay (<%d), re-fetching con limit=%d",
+            ebay_pipeline.cleaned.clean_total, _MIN_CLEAN_COMPS, _REFETCH_LIMIT,
+        )
+        try:
+            ebay_raw2 = await ebay.get_sold_comps(
+                barcode=barcode, keyword=search_keyword, days=30,
+                limit=_REFETCH_LIMIT, condition=condition,
+            )
+            if ebay_raw2.listings:
+                ebay_raw2 = await enrich_listings(
+                    ebay_raw2, keyword=search_keyword or barcode,
+                )
+                if search_keyword:
+                    ebay_raw2 = await filter_comps_by_relevance(
+                        ebay_raw2, search_keyword,
+                    )
+                ebay_pipeline2 = _run_pipeline(
+                    ebay_raw2, marketplace_name="ebay",
+                    enriched=True, **pipeline_kwargs,
+                )
+                if ebay_pipeline2.cleaned.clean_total > ebay_pipeline.cleaned.clean_total:
+                    logger.info(
+                        "Re-fetch mejoró de %d a %d comps limpios",
+                        ebay_pipeline.cleaned.clean_total,
+                        ebay_pipeline2.cleaned.clean_total,
+                    )
+                    ebay_pipeline = ebay_pipeline2
+        except Exception as e:
+            logger.warning("eBay re-fetch failed: %s", e)
 
     amazon_pipeline: _PipelineResult | None = None
     if amazon_raw and amazon_raw.listings:
