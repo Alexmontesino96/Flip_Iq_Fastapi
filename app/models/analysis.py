@@ -22,8 +22,8 @@ class Analysis(Base):
     # Results
     estimated_sale_price: Mapped[float | None] = mapped_column(Numeric(10, 2))
     net_profit: Mapped[float | None] = mapped_column(Numeric(10, 2))
-    margin_pct: Mapped[float | None] = mapped_column(Numeric(5, 2))
-    roi_pct: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    margin_pct: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    roi_pct: Mapped[float | None] = mapped_column(Numeric(10, 2))
 
     # Scores (0-100)
     flip_score: Mapped[int | None] = mapped_column(Integer)  # Score general de rentabilidad

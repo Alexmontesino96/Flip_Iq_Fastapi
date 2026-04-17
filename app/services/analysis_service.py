@@ -1021,10 +1021,18 @@ async def run_analysis(
 
     # Persistir
     analysis_id = None
+    # Capturar atributos del product ANTES del try/except para evitar
+    # PendingRollbackError si el INSERT falla y la sesión queda en rollback.
+    _product_id = product.id if product is not None else None
+    _product_barcode = product.barcode if product is not None else None
+    _product_title = product.title if product is not None else None
+    _product_brand = product.brand if product is not None else None
+    _product_image_url = product.image_url if product is not None else None
+
     if product is not None:
         try:
             analysis = Analysis(
-                product_id=product.id,
+                product_id=_product_id,
                 cost_price=cost_price,
                 marketplace=marketplace,
                 estimated_sale_price=estimated_sale,
@@ -1049,6 +1057,10 @@ async def run_analysis(
             analysis_id = analysis.id
         except Exception as e:
             logger.warning("DB persist failed, returning result without ID: %s", e)
+            try:
+                await db.rollback()
+            except Exception:
+                pass
 
     # -----------------------------------------------------------------------
     # 9. Construir MarketplaceAnalysis para cada marketplace
@@ -1058,13 +1070,13 @@ async def run_analysis(
 
     # Product summary
     product_title = search_keyword or (barcode or "Unknown")
-    if product is not None:
+    if _product_id is not None:
         product_summary = ProductSummary(
-            id=product.id,
-            barcode=product.barcode,
-            title=product.title,
-            brand=product.brand,
-            image_url=product.image_url,
+            id=_product_id,
+            barcode=_product_barcode,
+            title=_product_title,
+            brand=_product_brand,
+            image_url=_product_image_url,
         )
     else:
         fallback_brand = upc_info.get("brand") if upc_info else None
