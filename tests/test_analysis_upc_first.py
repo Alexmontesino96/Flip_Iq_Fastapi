@@ -147,16 +147,46 @@ class TestUpcSkipsEnricher:
             mock_filter.assert_called_once()
 
 
-class TestUpcRefetchLimit:
-    """Re-fetch uses limit=500 for UPC, 150 for keyword."""
+class TestUpcSupplementAndRefetch:
+    """UPC supplement with keyword when few results, refetch with limit=500."""
 
     @pytest.mark.asyncio
-    async def test_refetch_upc_uses_500(self):
-        """When barcode and few clean comps, re-fetch uses limit=500."""
+    async def test_upc_supplements_with_keyword(self):
+        """When UPC returns <50 items, supplements with keyword search."""
         small_comps = _make_comps(5)
         big_comps = _make_comps(100)
         mock_ebay = AsyncMock()
+        # Call 1: UPC → 5 items, Call 2: keyword supplement → 100
         mock_ebay.get_sold_comps = AsyncMock(side_effect=[small_comps, big_comps])
+
+        with (
+            _KEEPA_PATCH,
+            patch("app.services.analysis_service._get_ebay_client", return_value=mock_ebay),
+            patch("app.services.analysis_service.lookup_upc", new_callable=AsyncMock, return_value={"title": "Nintendo Switch OLED"}),
+            patch("app.services.analysis_service.categorize_product", new_callable=AsyncMock, return_value=None),
+            patch("app.services.analysis_service.enrich_listings", new_callable=AsyncMock, side_effect=lambda comps, **kw: comps),
+            patch("app.services.analysis_service.filter_comps_by_relevance", new_callable=AsyncMock, side_effect=lambda comps, kw: comps),
+            patch("app.services.analysis_service.generate_explanation", new_callable=AsyncMock, return_value="Test explanation"),
+        ):
+            from app.services.analysis_service import run_analysis
+            await run_analysis(
+                db=_mock_db(), barcode="045496596439", keyword=None,
+                cost_price=200.0, marketplace="ebay",
+            )
+
+            calls = mock_ebay.get_sold_comps.call_args_list
+            assert len(calls) >= 2
+            # Second call should be keyword supplement with limit=240
+            supplement_call = calls[1]
+            assert supplement_call.kwargs.get("keyword") == "Nintendo Switch OLED"
+            assert supplement_call.kwargs.get("limit") == 240
+
+    @pytest.mark.asyncio
+    async def test_no_supplement_when_enough_upc_results(self):
+        """When UPC returns >=50 items, no keyword supplement needed."""
+        big_comps = _make_comps(100)
+        mock_ebay = AsyncMock()
+        mock_ebay.get_sold_comps = AsyncMock(return_value=big_comps)
 
         with (
             _KEEPA_PATCH,
@@ -171,7 +201,5 @@ class TestUpcRefetchLimit:
                 cost_price=200.0, marketplace="ebay",
             )
 
-            calls = mock_ebay.get_sold_comps.call_args_list
-            assert len(calls) >= 2
-            refetch_call = calls[1]
-            assert refetch_call.kwargs.get("limit") == 500
+            # Only 1 call — no supplement needed
+            assert mock_ebay.get_sold_comps.call_count == 1

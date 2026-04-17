@@ -704,24 +704,55 @@ async def run_analysis(
     else:
         ebay_raw = await ebay_coro
 
-    # 1b. Fallback eBay: si barcode no devolvió, reintentar con keyword
-    if not ebay_raw.listings and barcode and search_keyword and search_keyword != barcode:
-        logger.info("eBay barcode sin resultados, reintentando con keyword='%s'", search_keyword)
-        try:
-            ebay_raw = await ebay.get_sold_comps(
-                keyword=search_keyword, days=30, limit=50, condition=condition,
-                category_id=ebay_category_id,
+    # 1b. Fallback/supplement eBay: si barcode no devolvió o devolvió pocos,
+    # reintentar con keyword (el scraper funciona mejor con keywords que UPCs).
+    _MIN_UPC_COMPS = 50  # Umbral: si UPC devuelve menos, suplementar con keyword
+    upc_hit = bool(barcode and ebay_raw.listings)
+    if barcode and search_keyword and search_keyword != barcode:
+        if not ebay_raw.listings:
+            logger.info("eBay barcode sin resultados, buscando con keyword='%s'", search_keyword)
+            try:
+                ebay_raw = await ebay.get_sold_comps(
+                    keyword=search_keyword, days=30, limit=ebay_limit,
+                    condition=condition, category_id=ebay_category_id,
+                )
+                upc_hit = False  # keyword search necesita enricher
+            except Exception as e:
+                logger.warning("eBay keyword fallback failed: %s", e)
+        elif len(ebay_raw.listings) < _MIN_UPC_COMPS:
+            # UPC devolvió pocos items — suplementar con keyword search
+            logger.info(
+                "eBay barcode solo %d items (<%d), suplementando con keyword='%s'",
+                len(ebay_raw.listings), _MIN_UPC_COMPS, search_keyword,
             )
-        except Exception as e:
-            logger.warning("eBay keyword fallback failed: %s", e)
+            try:
+                ebay_kw = await ebay.get_sold_comps(
+                    keyword=search_keyword, days=30, limit=ebay_limit,
+                    condition=condition, category_id=ebay_category_id,
+                )
+                if ebay_kw.listings:
+                    # Merge: UPC items + keyword items, dedup por item_id
+                    seen_ids = {l.item_id for l in ebay_raw.listings if l.item_id}
+                    new_listings = [
+                        l for l in ebay_kw.listings
+                        if not l.item_id or l.item_id not in seen_ids
+                    ]
+                    merged = ebay_raw.listings + new_listings
+                    ebay_raw = CompsResult.from_listings(
+                        merged, marketplace="ebay", days=30,
+                    )
+                    upc_hit = False  # keyword items necesitan enricher
+                    logger.info(
+                        "Merge UPC+keyword: %d items totales",
+                        len(ebay_raw.listings),
+                    )
+            except Exception as e:
+                logger.warning("eBay keyword supplement failed: %s", e)
 
     # -----------------------------------------------------------------------
     # 2. Enriquecer títulos eBay con LLM (Amazon/Keepa ya tiene datos struct.)
     # -----------------------------------------------------------------------
     ebay_enriched = False
-    # Si la búsqueda fue por barcode Y retornó resultados, los datos ya son limpios
-    # (UPC search tiene ~0.2% noise vs ~29% con keyword sin categoría)
-    upc_hit = bool(barcode and ebay_raw.listings)
 
     if ebay_raw.listings and not upc_hit:
         ebay_raw = await enrich_listings(ebay_raw, keyword=search_keyword or barcode)
