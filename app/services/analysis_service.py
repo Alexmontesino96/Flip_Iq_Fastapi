@@ -708,26 +708,14 @@ async def run_analysis(
     else:
         ebay_raw = await ebay_coro
 
-    # 1b. Fallback/supplement eBay: si barcode no devolvió o devolvió pocos
-    # items RECIENTES, reintentar con keyword. UPC search en eBay puede devolver
-    # muchos items viejos (>30 días) que comp_cleaner filtrará, dejando pocos útiles.
-    _MIN_RECENT_COMPS = 80  # Mínimo de items recientes para considerar suficiente
+    # 1b. UPC supplement: siempre suplementar barcode con keyword search.
+    # UPC search en eBay devuelve items que abarcan meses; comp_cleaner descarta
+    # los viejos (>30 días), dejando pocos. Keyword search trae items más recientes.
     upc_hit = bool(barcode and ebay_raw.listings)
     if barcode and search_keyword and search_keyword != barcode:
-        # Contar items CON fecha dentro de la ventana de 30 días.
-        # Items sin ended_at no cuentan como recientes (son desconocidos).
-        _recent_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-        recent_count = sum(
-            1 for l in ebay_raw.listings
-            if l.ended_at is not None and l.ended_at >= _recent_cutoff
-        )
-        logger.info(
-            "UPC check: %d total listings, %d recent (last 30d)",
-            len(ebay_raw.listings), recent_count,
-        )
-
         if not ebay_raw.listings:
-            logger.info("eBay barcode sin resultados, buscando con keyword='%s'", search_keyword)
+            # UPC no devolvió nada → fallback completo a keyword
+            logger.info("eBay barcode sin resultados, fallback keyword='%s'", search_keyword)
             try:
                 ebay_raw = await ebay.get_sold_comps(
                     keyword=search_keyword, days=30, limit=ebay_limit,
@@ -736,10 +724,11 @@ async def run_analysis(
                 upc_hit = False
             except Exception as e:
                 logger.warning("eBay keyword fallback failed: %s", e)
-        elif recent_count < _MIN_RECENT_COMPS:
+        else:
+            # UPC devolvió items → suplementar con keyword para más datos recientes
             logger.info(
-                "eBay barcode solo %d items recientes (<%d), suplementando con keyword='%s'",
-                recent_count, _MIN_RECENT_COMPS, search_keyword,
+                "Suplementando UPC (%d items) con keyword='%s'",
+                len(ebay_raw.listings), search_keyword,
             )
             try:
                 ebay_kw = await ebay.get_sold_comps(

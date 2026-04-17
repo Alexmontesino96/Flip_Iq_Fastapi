@@ -92,12 +92,12 @@ class TestUpcFirstLimits:
             assert first_call.kwargs.get("limit") == 50
 
 
-class TestUpcSkipsEnricher:
-    """UPC hit skips enricher and relevance filter."""
+class TestEnricherBehavior:
+    """Enricher runs for keyword searches and UPC+supplement merged data."""
 
     @pytest.mark.asyncio
-    async def test_upc_hit_skips_enricher(self):
-        """When barcode returns results, enricher is NOT called."""
+    async def test_upc_without_lookup_skips_enricher(self):
+        """When UPC lookup fails (no keyword), enricher is NOT called."""
         mock_ebay = AsyncMock()
         mock_ebay.get_sold_comps = AsyncMock(return_value=_make_comps(100))
         mock_enrich = AsyncMock(side_effect=lambda comps, **kw: comps)
@@ -106,7 +106,7 @@ class TestUpcSkipsEnricher:
         with (
             _KEEPA_PATCH,
             patch("app.services.analysis_service._get_ebay_client", return_value=mock_ebay),
-            patch("app.services.analysis_service.lookup_upc", new_callable=AsyncMock, return_value={"title": "Nintendo Switch OLED"}),
+            patch("app.services.analysis_service.lookup_upc", new_callable=AsyncMock, return_value=None),
             patch("app.services.analysis_service.categorize_product", new_callable=AsyncMock, return_value=None),
             patch("app.services.analysis_service.enrich_listings", mock_enrich),
             patch("app.services.analysis_service.filter_comps_by_relevance", mock_filter),
@@ -118,6 +118,7 @@ class TestUpcSkipsEnricher:
                 cost_price=200.0, marketplace="ebay",
             )
 
+            # No keyword → no supplement → upc_hit stays True → no enricher
             mock_enrich.assert_not_called()
             mock_filter.assert_not_called()
 
@@ -147,17 +148,16 @@ class TestUpcSkipsEnricher:
             mock_filter.assert_called_once()
 
 
-class TestUpcSupplementAndRefetch:
-    """UPC supplement with keyword when few results, refetch with limit=500."""
+class TestUpcAlwaysSupplements:
+    """UPC barcode search always supplements with keyword search."""
 
     @pytest.mark.asyncio
-    async def test_upc_supplements_with_keyword(self):
-        """When UPC returns <80 recent items, supplements with keyword search."""
-        small_comps = _make_comps(5)
-        big_comps = _make_comps(100)
+    async def test_upc_always_supplements_with_keyword(self):
+        """Barcode search always makes a second keyword call to get recent items."""
+        upc_comps = _make_comps(100)
+        kw_comps = _make_comps(100)
         mock_ebay = AsyncMock()
-        # Call 1: UPC → 5 items, Call 2: keyword supplement → 100
-        mock_ebay.get_sold_comps = AsyncMock(side_effect=[small_comps, big_comps])
+        mock_ebay.get_sold_comps = AsyncMock(side_effect=[upc_comps, kw_comps])
 
         with (
             _KEEPA_PATCH,
@@ -176,22 +176,22 @@ class TestUpcSupplementAndRefetch:
 
             calls = mock_ebay.get_sold_comps.call_args_list
             assert len(calls) >= 2
-            # Second call should be keyword supplement with limit=240
+            # Second call should be keyword supplement
             supplement_call = calls[1]
             assert supplement_call.kwargs.get("keyword") == "Nintendo Switch OLED"
             assert supplement_call.kwargs.get("limit") == 240
 
     @pytest.mark.asyncio
-    async def test_no_supplement_when_enough_upc_results(self):
-        """When UPC returns >=80 recent items, no keyword supplement needed."""
-        big_comps = _make_comps(100)
+    async def test_upc_no_supplement_when_keyword_equals_barcode(self):
+        """No supplement when UPC lookup fails (keyword == barcode)."""
+        upc_comps = _make_comps(100)
         mock_ebay = AsyncMock()
-        mock_ebay.get_sold_comps = AsyncMock(return_value=big_comps)
+        mock_ebay.get_sold_comps = AsyncMock(return_value=upc_comps)
 
         with (
             _KEEPA_PATCH,
             patch("app.services.analysis_service._get_ebay_client", return_value=mock_ebay),
-            patch("app.services.analysis_service.lookup_upc", new_callable=AsyncMock, return_value={"title": "Nintendo Switch OLED"}),
+            patch("app.services.analysis_service.lookup_upc", new_callable=AsyncMock, return_value=None),
             patch("app.services.analysis_service.categorize_product", new_callable=AsyncMock, return_value=None),
             patch("app.services.analysis_service.generate_explanation", new_callable=AsyncMock, return_value="Test explanation"),
         ):
@@ -201,5 +201,5 @@ class TestUpcSupplementAndRefetch:
                 cost_price=200.0, marketplace="ebay",
             )
 
-            # Only 1 call — no supplement needed
+            # Only 1 call — no keyword to supplement with
             assert mock_ebay.get_sold_comps.call_count == 1
