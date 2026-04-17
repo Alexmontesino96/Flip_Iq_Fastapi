@@ -23,7 +23,7 @@ async def analyze_product(
     redis=Depends(get_redis),
 ):
     # Soft gate check
-    gate = await check_analysis_gate(request, redis)
+    gate = await check_analysis_gate(request, redis, db)
     if not gate.allowed:
         return JSONResponse(
             status_code=403,

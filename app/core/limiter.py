@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from fastapi import Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 
@@ -42,7 +44,9 @@ class GateResult:
     reset_in: int = 0
 
 
-async def check_analysis_gate(request: Request, redis) -> GateResult:
+async def check_analysis_gate(
+    request: Request, redis, db: AsyncSession | None = None,
+) -> GateResult:
     """Check if the request is allowed to run an analysis.
 
     Returns GateResult without incrementing counters.
@@ -62,7 +66,7 @@ async def check_analysis_gate(request: Request, redis) -> GateResult:
         return GateResult(allowed=True, tier="anonymous", remaining=ANON_LIMIT)
 
     try:
-        return await _check_gate_redis(request, redis)
+        return await _check_gate_redis(request, redis, db)
     except Exception as e:
         logger.warning("Redis error en gate check, fail-open: %s", e)
         # Invalidate stale pool so next request attempts reconnection
@@ -71,7 +75,9 @@ async def check_analysis_gate(request: Request, redis) -> GateResult:
         return GateResult(allowed=True, tier="anonymous", remaining=ANON_LIMIT)
 
 
-async def _check_gate_redis(request: Request, redis) -> GateResult:
+async def _check_gate_redis(
+    request: Request, redis, db: AsyncSession | None = None,
+) -> GateResult:
     """Inner gate logic — all Redis calls here so caller can catch errors."""
     # 2. Email-verified cookie
     email: str | None = None
@@ -80,10 +86,16 @@ async def _check_gate_redis(request: Request, redis) -> GateResult:
         email = await redis.get(f"email_token:{token}")
 
     # 2b. Fallback: X-Verified-Email header (cross-domain where cookies fail)
-    if not email:
+    #     Validate against waitlist_entries in DB to reject arbitrary emails.
+    if not email and db:
         header_email = request.headers.get("x-verified-email", "").strip().lower()
-        if header_email and await redis.get(f"waitlist:{header_email}"):
-            email = header_email
+        if header_email:
+            from app.models.waitlist import WaitlistEntry
+            result = await db.execute(
+                select(WaitlistEntry.id).where(WaitlistEntry.email == header_email).limit(1)
+            )
+            if result.scalar_one_or_none() is not None:
+                email = header_email
 
     if email:
         count = int(await redis.get(f"verified:{email}") or 0)
