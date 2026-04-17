@@ -157,7 +157,7 @@ async def generate_explanation(
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_msg},
             ],
-            max_tokens=2000,
+            max_tokens=4000,
             temperature=0.7,
             timeout=25,
         )
@@ -181,7 +181,7 @@ async def generate_explanation(
                             {"role": "system", "content": SYSTEM_PROMPT},
                             {"role": "user", "content": user_msg},
                         ],
-                        max_tokens=2000,
+                        max_tokens=4000,
                         temperature=0.7,
                         timeout=25,
                     )

@@ -270,9 +270,24 @@ def test_validate_buy_confidence_49_degrades_to_watch():
     assert rec == "watch"
 
 
-def test_validate_buy_confidence_50_no_degrade():
-    """confidence 50 → no degrada por confianza."""
+def test_validate_buy_confidence_50_degrades_to_buy_small():
+    """confidence 50 → buy_small (moderate confidence warning)."""
     confidence = ConfidenceResult(score=50, category="medium", factors={})
+    title_risk = TitleRiskResult(
+        risk_score=0.0, flagged_listings=0, flagged_pct=0.0,
+        semantic_flags={}, manual_review_required=False,
+    )
+    cleaned = CleanedComps(clean_total=20, raw_total=25, requested_condition="any",
+                           condition_match_rate=1.0, condition_filtered=0)
+    profit = compute_profit(150.0, 50.0, "ebay")
+    rec, warnings = _validate_buy("buy", confidence, title_risk, cleaned, profit)
+    assert rec == "buy_small"
+    assert any("moderate" in w.lower() and "confidence" in w.lower() for w in warnings)
+
+
+def test_validate_buy_confidence_60_no_degrade():
+    """confidence 60 → no degrada por confianza."""
+    confidence = ConfidenceResult(score=60, category="medium", factors={})
     title_risk = TitleRiskResult(
         risk_score=0.0, flagged_listings=0, flagged_pct=0.0,
         semantic_flags={}, manual_review_required=False,

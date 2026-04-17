@@ -513,6 +513,13 @@ def _validate_buy(
         )
         if recommendation in ("buy", "buy_small"):
             recommendation = "watch"
+    elif confidence.score < 60:
+        warnings.append(
+            f"Moderate analysis confidence ({confidence.score}/100). "
+            "Consider buying smaller quantities until more data is available."
+        )
+        if recommendation == "buy":
+            recommendation = "buy_small"
 
     if cleaned.requested_condition != "any":
         if cleaned.condition_filtered == 0 and cleaned.condition_match_rate < 0.5:
@@ -1110,28 +1117,28 @@ def _build_comparison_text(
     delta_pct = ((amz_median - ebay_median) / ebay_median * 100) if ebay_median > 0 else 0
 
     return (
-        f"\n\nCOMPARACIÓN ENTRE MARKETPLACES:\n"
+        f"\n\nMARKETPLACE COMPARISON:\n"
         f"\n"
         f"eBay:\n"
-        f"- Mediana: ${ebay_median:.2f} ({ebay.cleaned.clean_total} comps)\n"
+        f"- Median: ${ebay_median:.2f} ({ebay.cleaned.clean_total} comps)\n"
         f"- Profit: ${ebay.profit_market.profit:.2f} (ROI: {ebay.profit_market.roi:.1%})\n"
-        f"- Velocidad: {ebay.velocity.score}/100 ({ebay.velocity.category})\n"
-        f"- Riesgo: {ebay.risk.score}/100 ({ebay.risk.category})\n"
-        f"- Tendencia demanda: {ebay.trend.demand_trend:+.1f}%\n"
-        f"- Opportunity Score: {ebay.opportunity}/100 → {ebay.recommendation}\n"
+        f"- Velocity: {ebay.velocity.score}/100 ({ebay.velocity.category})\n"
+        f"- Risk: {ebay.risk.score}/100 ({ebay.risk.category})\n"
+        f"- Demand trend: {ebay.trend.demand_trend:+.1f}%\n"
+        f"- Opportunity: {ebay.opportunity}/100 → {ebay.recommendation}\n"
         f"\n"
         f"Amazon:\n"
-        f"- Mediana: ${amz_median:.2f} ({amazon.cleaned.clean_total} comps)\n"
+        f"- Median: ${amz_median:.2f} ({amazon.cleaned.clean_total} comps)\n"
         f"- Profit: ${amazon.profit_market.profit:.2f} (ROI: {amazon.profit_market.roi:.1%})\n"
-        f"- Velocidad: {amazon.velocity.score}/100 ({amazon.velocity.category})\n"
-        f"- Riesgo: {amazon.risk.score}/100 ({amazon.risk.category})\n"
-        f"- Tendencia demanda: {amazon.trend.demand_trend:+.1f}%\n"
-        f"- Opportunity Score: {amazon.opportunity}/100 → {amazon.recommendation}\n"
+        f"- Velocity: {amazon.velocity.score}/100 ({amazon.velocity.category})\n"
+        f"- Risk: {amazon.risk.score}/100 ({amazon.risk.category})\n"
+        f"- Demand trend: {amazon.trend.demand_trend:+.1f}%\n"
+        f"- Opportunity: {amazon.opportunity}/100 → {amazon.recommendation}\n"
         f"\n"
-        f"Delta de precios: Amazon es {delta_pct:+.1f}% vs eBay\n"
+        f"Price delta: Amazon is {delta_pct:+.1f}% vs eBay\n"
         f"\n"
-        f"Analiza las oportunidades y tendencias en AMBOS marketplaces. "
-        f"Recomienda el mejor canal para este producto y por qué."
+        f"Analyze opportunities and trends across BOTH marketplaces. "
+        f"Recommend the best channel for this product and why."
     )
 
 

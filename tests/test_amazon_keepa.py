@@ -543,8 +543,8 @@ class TestBuildComparisonText:
         assert text is not None
         assert "eBay" in text
         assert "Amazon" in text
-        assert "COMPARACIÓN" in text
-        assert "Delta" in text
+        assert "MARKETPLACE COMPARISON" in text
+        assert "delta" in text.lower()
 
     def test_only_ebay(self):
         from app.services.analysis_service import _run_pipeline, _build_comparison_text
