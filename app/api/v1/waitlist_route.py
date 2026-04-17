@@ -85,17 +85,33 @@ async def join_waitlist(
 @router.get("/status", response_model=WaitlistStatus)
 async def waitlist_status(
     request: Request,
+    db: AsyncSession = Depends(get_db),
     redis=Depends(get_redis),
 ):
-    token = request.cookies.get("flipiq_verified")
-    if not token or not redis:
-        return WaitlistStatus(verified=False)
+    email: str | None = None
 
-    email = await redis.get(f"email_token:{token}")
+    # 1. Cookie (same-domain)
+    if redis:
+        token = request.cookies.get("flipiq_verified")
+        if token:
+            email = await redis.get(f"email_token:{token}")
+
+    # 2. Fallback: X-Verified-Email header (cross-domain)
+    if not email:
+        header_email = request.headers.get("x-verified-email", "").strip().lower()
+        if header_email:
+            result = await db.execute(
+                select(WaitlistEntry.id).where(WaitlistEntry.email == header_email).limit(1)
+            )
+            if result.scalar_one_or_none() is not None:
+                email = header_email
+
     if not email:
         return WaitlistStatus(verified=False)
 
-    count = int(await redis.get(f"verified:{email}") or 0)
+    count = 0
+    if redis:
+        count = int(await redis.get(f"verified:{email}") or 0)
     return WaitlistStatus(
         verified=True,
         email=email,
