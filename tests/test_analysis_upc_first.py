@@ -152,7 +152,7 @@ class TestUpcSupplementAndRefetch:
 
     @pytest.mark.asyncio
     async def test_upc_supplements_with_keyword(self):
-        """When UPC returns <50 items, supplements with keyword search."""
+        """When UPC returns <80 recent items, supplements with keyword search."""
         small_comps = _make_comps(5)
         big_comps = _make_comps(100)
         mock_ebay = AsyncMock()
@@ -183,7 +183,7 @@ class TestUpcSupplementAndRefetch:
 
     @pytest.mark.asyncio
     async def test_no_supplement_when_enough_upc_results(self):
-        """When UPC returns >=50 items, no keyword supplement needed."""
+        """When UPC returns >=80 recent items, no keyword supplement needed."""
         big_comps = _make_comps(100)
         mock_ebay = AsyncMock()
         mock_ebay.get_sold_comps = AsyncMock(return_value=big_comps)

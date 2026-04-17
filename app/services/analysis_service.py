@@ -13,7 +13,7 @@ import asyncio
 import re
 import logging
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -708,11 +708,23 @@ async def run_analysis(
     else:
         ebay_raw = await ebay_coro
 
-    # 1b. Fallback/supplement eBay: si barcode no devolvió o devolvió pocos,
-    # reintentar con keyword (el scraper funciona mejor con keywords que UPCs).
-    _MIN_UPC_COMPS = 50  # Umbral: si UPC devuelve menos, suplementar con keyword
+    # 1b. Fallback/supplement eBay: si barcode no devolvió o devolvió pocos
+    # items RECIENTES, reintentar con keyword. UPC search en eBay puede devolver
+    # muchos items viejos (>30 días) que comp_cleaner filtrará, dejando pocos útiles.
+    _MIN_RECENT_COMPS = 80  # Mínimo de items recientes para considerar suficiente
     upc_hit = bool(barcode and ebay_raw.listings)
     if barcode and search_keyword and search_keyword != barcode:
+        # Contar items dentro de la ventana de 30 días (no el raw total)
+        _recent_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        recent_count = sum(
+            1 for l in ebay_raw.listings
+            if l.ended_at is None or l.ended_at >= _recent_cutoff
+        )
+        logger.info(
+            "UPC check: %d total listings, %d recent (last 30d)",
+            len(ebay_raw.listings), recent_count,
+        )
+
         if not ebay_raw.listings:
             logger.info("eBay barcode sin resultados, buscando con keyword='%s'", search_keyword)
             try:
@@ -720,14 +732,13 @@ async def run_analysis(
                     keyword=search_keyword, days=30, limit=ebay_limit,
                     condition=condition, category_id=ebay_category_id,
                 )
-                upc_hit = False  # keyword search necesita enricher
+                upc_hit = False
             except Exception as e:
                 logger.warning("eBay keyword fallback failed: %s", e)
-        elif len(ebay_raw.listings) < _MIN_UPC_COMPS:
-            # UPC devolvió pocos items — suplementar con keyword search
+        elif recent_count < _MIN_RECENT_COMPS:
             logger.info(
-                "eBay barcode solo %d items (<%d), suplementando con keyword='%s'",
-                len(ebay_raw.listings), _MIN_UPC_COMPS, search_keyword,
+                "eBay barcode solo %d items recientes (<%d), suplementando con keyword='%s'",
+                recent_count, _MIN_RECENT_COMPS, search_keyword,
             )
             try:
                 ebay_kw = await ebay.get_sold_comps(
@@ -735,7 +746,6 @@ async def run_analysis(
                     condition=condition, category_id=ebay_category_id,
                 )
                 if ebay_kw.listings:
-                    # Merge: UPC items + keyword items, dedup por item_id
                     seen_ids = {l.item_id for l in ebay_raw.listings if l.item_id}
                     new_listings = [
                         l for l in ebay_kw.listings
@@ -745,10 +755,10 @@ async def run_analysis(
                     ebay_raw = CompsResult.from_listings(
                         merged, marketplace="ebay", days=30,
                     )
-                    upc_hit = False  # keyword items necesitan enricher
+                    upc_hit = False
                     logger.info(
-                        "Merge UPC+keyword: %d items totales",
-                        len(ebay_raw.listings),
+                        "Merge UPC+keyword: %d total (%d new from keyword)",
+                        len(ebay_raw.listings), len(new_listings),
                     )
             except Exception as e:
                 logger.warning("eBay keyword supplement failed: %s", e)
