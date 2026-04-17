@@ -166,6 +166,12 @@ class EbayClient(MarketplaceClient):
         if not query:
             return CompsResult(marketplace="ebay")
 
+        logger.info(
+            "eBay get_sold_comps: query='%s' limit=%d data_source='%s' proxy=%s",
+            query, limit, self._data_source,
+            bool(self._proxy_url),
+        )
+
         # Normalizar: "any" → None para el scraper (sin filtro de condición en URL)
         cond = condition if condition and condition != "any" else None
 
@@ -181,19 +187,31 @@ class EbayClient(MarketplaceClient):
                 data = await self._fetch_via_apify(query, limit)
         elif self._data_source == "scraper":
             data = await self._fetch_via_scraper(query, limit, condition=cond, category_id=category_id)
+            logger.info(
+                "Scraper result: %d items for '%s'",
+                len(data) if data else 0, query,
+            )
             if data is None and self._token:
                 logger.info("Scraper falló, intentando fallback a Apify para '%s'", query)
                 data = await self._fetch_via_apify(query, limit)
+                logger.info(
+                    "Apify fallback result: %d items for '%s'",
+                    len(data) if data else 0, query,
+                )
         else:
             # data_source == "apify"
+            logger.info("Usando Apify directo (data_source='apify')")
             data = await self._fetch_via_apify(query, limit)
 
         if not data:
+            logger.warning("eBay: 0 items para '%s' después de todos los intentos", query)
             return CompsResult(marketplace="ebay", days_of_data=days)
 
         listings = self._map_and_filter(data, min_price, max_price)
-        source = "Scraper" if self._data_source == "scraper" else "Apify"
-        logger.info("%s: %d items → %d listings para '%s'", source, len(data), len(listings), query)
+        logger.info(
+            "eBay FINAL: data_source='%s' %d raw → %d listings para '%s'",
+            self._data_source, len(data), len(listings), query,
+        )
 
         return CompsResult.from_listings(listings, marketplace="ebay", days=days)
 

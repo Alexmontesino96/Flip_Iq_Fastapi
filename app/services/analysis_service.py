@@ -681,6 +681,10 @@ async def run_analysis(
 
     ebay = _get_ebay_client()
     ebay_limit = 240 if barcode else 50
+    logger.info(
+        "FETCH START: barcode='%s' keyword='%s' ebay_limit=%d",
+        barcode, search_keyword, ebay_limit,
+    )
     ebay_coro = ebay.get_sold_comps(
         barcode=barcode, keyword=search_keyword, days=30, limit=ebay_limit,
         condition=condition, category_id=ebay_category_id,
