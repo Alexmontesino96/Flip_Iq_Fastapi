@@ -863,9 +863,15 @@ async def run_analysis(
 
     # -----------------------------------------------------------------------
     # 4. Seleccionar pipeline primario (el del marketplace solicitado)
+    #    Si el marketplace solicitado no tiene datos, fallback al que sí tenga.
     # -----------------------------------------------------------------------
     if marketplace == "amazon_fba" and amazon_pipeline and amazon_pipeline.has_valid_comps:
         primary = amazon_pipeline
+    elif ebay_pipeline.has_valid_comps:
+        primary = ebay_pipeline
+    elif amazon_pipeline and amazon_pipeline.has_valid_comps:
+        primary = amazon_pipeline
+        logger.info("eBay sin datos válidos, usando Amazon como pipeline primario")
     else:
         primary = ebay_pipeline
 
