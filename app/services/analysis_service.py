@@ -668,8 +668,9 @@ async def run_analysis(
     ebay_category_id = category_result.ebay_category_id if category_result else None
 
     ebay = _get_ebay_client()
+    ebay_limit = 240 if barcode else 50
     ebay_coro = ebay.get_sold_comps(
-        barcode=barcode, keyword=search_keyword, days=30, limit=50,
+        barcode=barcode, keyword=search_keyword, days=30, limit=ebay_limit,
         condition=condition, category_id=ebay_category_id,
     )
 
@@ -706,14 +707,18 @@ async def run_analysis(
     # 2. Enriquecer títulos eBay con LLM (Amazon/Keepa ya tiene datos struct.)
     # -----------------------------------------------------------------------
     ebay_enriched = False
-    if ebay_raw.listings:
+    # Si la búsqueda fue por barcode Y retornó resultados, los datos ya son limpios
+    # (UPC search tiene ~0.2% noise vs ~29% con keyword sin categoría)
+    upc_hit = bool(barcode and ebay_raw.listings)
+
+    if ebay_raw.listings and not upc_hit:
         ebay_raw = await enrich_listings(ebay_raw, keyword=search_keyword or barcode)
         ebay_enriched = True
 
     # -----------------------------------------------------------------------
     # 2b. LLM relevance filter (después de enrich, antes de pipeline)
     # -----------------------------------------------------------------------
-    if ebay_raw.listings and search_keyword:
+    if ebay_raw.listings and search_keyword and not upc_hit:
         ebay_raw = await filter_comps_by_relevance(ebay_raw, search_keyword)
     if amazon_raw and amazon_raw.listings and search_keyword:
         amazon_raw = await filter_comps_by_relevance(amazon_raw, search_keyword)
@@ -745,26 +750,29 @@ async def run_analysis(
     # -----------------------------------------------------------------------
     _MIN_CLEAN_COMPS = 15
     _REFETCH_LIMIT = 150  # 150 items → scraper pide página 1 completa (240)
+    _REFETCH_LIMIT_UPC = 500  # UPC data es limpia, vale la pena pedir más
     if (
         ebay_pipeline.cleaned.clean_total < _MIN_CLEAN_COMPS
         and search_keyword
         and ebay_pipeline.cleaned.clean_total > 0  # al menos algo encontró
     ):
+        refetch_limit = _REFETCH_LIMIT_UPC if barcode else _REFETCH_LIMIT
         logger.info(
             "Solo %d comps limpios eBay (<%d), re-fetching con limit=%d",
-            ebay_pipeline.cleaned.clean_total, _MIN_CLEAN_COMPS, _REFETCH_LIMIT,
+            ebay_pipeline.cleaned.clean_total, _MIN_CLEAN_COMPS, refetch_limit,
         )
         try:
             ebay_raw2 = await ebay.get_sold_comps(
                 barcode=barcode, keyword=search_keyword, days=30,
-                limit=_REFETCH_LIMIT, condition=condition,
+                limit=refetch_limit, condition=condition,
                 category_id=ebay_category_id,
             )
             if ebay_raw2.listings:
-                ebay_raw2 = await enrich_listings(
-                    ebay_raw2, keyword=search_keyword or barcode,
-                )
-                if search_keyword:
+                if not upc_hit:
+                    ebay_raw2 = await enrich_listings(
+                        ebay_raw2, keyword=search_keyword or barcode,
+                    )
+                if search_keyword and not upc_hit:
                     ebay_raw2 = await filter_comps_by_relevance(
                         ebay_raw2, search_keyword,
                     )

@@ -66,7 +66,7 @@ class CompsResult:
     p75: float = 0.0  # percentil 75
     # Volumen
     total_sold: int = 0
-    days_of_data: int = 30
+    days_of_data: float = 30
     sales_per_day: float = 0.0
     marketplace: str = ""
     # Distribucion
@@ -90,6 +90,16 @@ class CompsResult:
         p25 = prices[max(0, n // 4 - 1)] if n >= 4 else prices[0]
         p75 = prices[min(n - 1, 3 * n // 4)] if n >= 4 else prices[-1]
 
+        # Calcular days_of_data real del rango de fechas de los listings
+        days_actual: float = days
+        ended_dates = [l.ended_at for l in listings if l.ended_at is not None]
+        if len(ended_dates) >= 2:
+            oldest = min(ended_dates)
+            newest = max(ended_dates)
+            span = (newest - oldest).total_seconds() / 86400
+            if span >= 1.0:
+                days_actual = round(span, 1)
+
         result = cls(
             listings=listings,
             avg_price=round(avg, 2),
@@ -100,8 +110,8 @@ class CompsResult:
             p25=round(p25, 2),
             p75=round(p75, 2),
             total_sold=n,
-            days_of_data=days,
-            sales_per_day=round(n / max(days, 1), 2),
+            days_of_data=days_actual,
+            sales_per_day=round(n / max(days_actual, 1), 2),
             marketplace=marketplace,
         )
 
@@ -179,7 +189,7 @@ class CleanedComps:
     min_price: float = 0.0
     max_price: float = 0.0
     sales_per_day: float = 0.0
-    days_of_data: int = 30
+    days_of_data: float = 30
     # Condition analysis
     requested_condition: str = "any"
     condition_counts: dict[str, int] = field(default_factory=dict)
