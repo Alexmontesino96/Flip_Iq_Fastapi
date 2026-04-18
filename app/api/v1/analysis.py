@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.limiter import check_analysis_gate, increment_analysis_counter
 from app.core.redis_client import get_redis
-from app.database import get_db
+from app.database import async_session, get_db
 from app.models.analysis import Analysis
 from app.models.product import Product
 from app.schemas.analysis import AnalysisRequest, AnalysisResponse, AnalysisHistory
@@ -76,7 +76,12 @@ async def analyze_product_stream(
     db: AsyncSession = Depends(get_db),
     redis=Depends(get_redis),
 ):
-    """SSE endpoint: envía datos en 2 chunks para respuesta progresiva."""
+    """SSE endpoint: envía datos en 2 chunks para respuesta progresiva.
+
+    NOTA: La sesión DB del generador se crea dentro del stream (no usa la
+    inyectada por Depends) porque FastAPI cierra las dependencias cuando el
+    handler retorna, pero StreamingResponse sigue corriendo después.
+    """
     gate = await check_analysis_gate(request, redis, db)
     if not gate.allowed:
         return JSONResponse(
@@ -92,37 +97,38 @@ async def analyze_product_stream(
     await increment_analysis_counter(request, redis, gate)
 
     async def event_stream():
-        try:
-            async for chunk in run_analysis_progressive(
-                db=db,
-                barcode=payload.barcode,
-                keyword=payload.keyword,
-                cost_price=payload.cost_price,
-                marketplace=payload.marketplace,
-                shipping_cost=payload.shipping_cost,
-                packaging_cost=payload.packaging_cost,
-                prep_cost=payload.prep_cost,
-                promo_cost=payload.promo_cost,
-                return_reserve_pct=payload.return_reserve_pct,
-                target_profit=payload.target_profit,
-                target_roi=payload.target_roi,
-                detailed=payload.detailed,
-                condition=payload.condition,
-                mode=payload.mode,
-                product_type=payload.product_type,
-            ):
-                event = chunk["event"]
-                data = chunk["data"]
-                if hasattr(data, "model_dump_json"):
-                    json_str = data.model_dump_json()
-                else:
-                    json_str = json.dumps(data)
-                yield f"event: {event}\ndata: {json_str}\n\n"
-            yield "event: done\ndata: {}\n\n"
-        except Exception as e:
-            logger.exception("SSE stream error: %s", e)
-            error_data = json.dumps({"error": str(e)})
-            yield f"event: error\ndata: {error_data}\n\n"
+        async with async_session() as stream_db:
+            try:
+                async for chunk in run_analysis_progressive(
+                    db=stream_db,
+                    barcode=payload.barcode,
+                    keyword=payload.keyword,
+                    cost_price=payload.cost_price,
+                    marketplace=payload.marketplace,
+                    shipping_cost=payload.shipping_cost,
+                    packaging_cost=payload.packaging_cost,
+                    prep_cost=payload.prep_cost,
+                    promo_cost=payload.promo_cost,
+                    return_reserve_pct=payload.return_reserve_pct,
+                    target_profit=payload.target_profit,
+                    target_roi=payload.target_roi,
+                    detailed=payload.detailed,
+                    condition=payload.condition,
+                    mode=payload.mode,
+                    product_type=payload.product_type,
+                ):
+                    event = chunk["event"]
+                    data = chunk["data"]
+                    if hasattr(data, "model_dump_json"):
+                        json_str = data.model_dump_json()
+                    else:
+                        json_str = json.dumps(data)
+                    yield f"event: {event}\ndata: {json_str}\n\n"
+                yield "event: done\ndata: {}\n\n"
+            except Exception as e:
+                logger.exception("SSE stream error: %s", e)
+                error_data = json.dumps({"error": str(e)})
+                yield f"event: error\ndata: {error_data}\n\n"
 
     remaining = max(gate.remaining - 1, 0)
     return StreamingResponse(
