@@ -16,7 +16,29 @@ class VelocityResult:
     sales_per_day: float
     category: str  # very_fast|healthy|moderate|slow
     market_sale_interval_days: float | None  # intervalo entre ventas en el mercado
-    estimated_days_to_sell: float | None      # None sin datos de listings activos
+    estimated_days_to_sell: str | None        # "~2d", "~7-30d", etc.
+
+
+def _format_days_to_sell(spd: float) -> str:
+    """Formatea estimación de días para vender.
+
+    Con ventas frecuentes (>= 0.5/día), muestra un número específico.
+    Con ventas escasas (< 0.5/día), muestra un rango que refleja la
+    incertidumbre real — ej. 3 ventas en 30 días ≠ "vende en 10 días".
+    """
+    point = min(90.0, max(1.0, 1.0 / spd))
+
+    if spd >= 0.5:
+        # Suficiente volumen para un estimado puntual
+        return f"~{round(point)}d"
+
+    # Baja frecuencia: rango con piso en el punto estimado y techo
+    # en el doble del intervalo (cap 90 días)
+    lo = max(1, round(point * 0.7))
+    hi = min(90, round(point * 2.0))
+    if lo == hi:
+        return f"~{lo}d"
+    return f"~{lo}-{hi}d"
 
 
 def compute_velocity(cleaned: CleanedComps) -> VelocityResult:
@@ -46,13 +68,10 @@ def compute_velocity(cleaned: CleanedComps) -> VelocityResult:
     # Intervalo entre ventas del mercado (no es promesa de venta individual)
     interval = round(1 / spd, 1) if spd > 0 else None
 
-    # Estimación de días para vender basada en velocidad del mercado
-    estimated = round(min(90.0, max(1.0, 1.0 / spd)), 1) if spd > 0 else None
-
     return VelocityResult(
         score=score,
         sales_per_day=round(spd, 4),
         category=category,
         market_sale_interval_days=interval,
-        estimated_days_to_sell=estimated,
+        estimated_days_to_sell=_format_days_to_sell(spd),
     )

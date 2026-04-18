@@ -47,7 +47,7 @@ class FakeVelocity:
     category: str = "moderate"
     sales_per_day: float = 0.5
     market_sale_interval_days: float = 2.0
-    estimated_days_to_sell: float = 7.0
+    estimated_days_to_sell: str = "~4-14d"
 
 
 @dataclass

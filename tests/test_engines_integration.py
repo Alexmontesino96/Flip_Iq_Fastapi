@@ -182,25 +182,25 @@ class TestVelocityEngine:
         cleaned = CleanedComps(sales_per_day=0.5, clean_total=15, days_of_data=30)
         result = compute_velocity(cleaned)
         assert result.market_sale_interval_days == 2.0
-        assert result.estimated_days_to_sell == 2.0
+        assert result.estimated_days_to_sell == "~2d"
 
     def test_estimated_days_to_sell_calculated(self):
-        """estimated_days_to_sell = 1/spd, clamped 1-90."""
+        """estimated_days_to_sell shows range when spd < 0.5."""
         cleaned = CleanedComps(sales_per_day=0.2, clean_total=6, days_of_data=30)
         result = compute_velocity(cleaned)
-        assert result.estimated_days_to_sell == 5.0
+        assert result.estimated_days_to_sell == "~4-10d"
 
     def test_estimated_days_to_sell_clamped_min(self):
-        """spd muy alto → estimated_days_to_sell = 1.0 (mínimo)."""
+        """spd muy alto → estimated_days_to_sell = ~1d (mínimo)."""
         cleaned = CleanedComps(sales_per_day=10.0, clean_total=300, days_of_data=30)
         result = compute_velocity(cleaned)
-        assert result.estimated_days_to_sell == 1.0
+        assert result.estimated_days_to_sell == "~1d"
 
     def test_estimated_days_to_sell_clamped_max(self):
-        """spd muy bajo → estimated_days_to_sell = 90.0 (máximo)."""
+        """spd muy bajo → estimated_days_to_sell capped at 90d."""
         cleaned = CleanedComps(sales_per_day=0.005, clean_total=1, days_of_data=30)
         result = compute_velocity(cleaned)
-        assert result.estimated_days_to_sell == 90.0
+        assert result.estimated_days_to_sell == "~63-90d"
 
     def test_estimated_days_to_sell_zero_spd(self):
         """spd = 0 → estimated_days_to_sell = None."""
@@ -418,7 +418,7 @@ class TestListingStrategy:
         cleaned = CleanedComps(clean_total=15, cv=0.15)
         velocity = VelocityResult(score=50, sales_per_day=0.5,
                                   category="healthy", market_sale_interval_days=2.0,
-                                  estimated_days_to_sell=2.0)
+                                  estimated_days_to_sell="~2d")
         risk = RiskResult(score=75, category="low", factors={})
 
         result = compute_listing_strategy(cleaned, velocity, risk)
@@ -433,7 +433,7 @@ class TestListingStrategy:
         cleaned = CleanedComps(clean_total=5, cv=0.30)
         velocity = VelocityResult(score=15, sales_per_day=0.05,
                                   category="slow", market_sale_interval_days=20.0,
-                                  estimated_days_to_sell=20.0)
+                                  estimated_days_to_sell="~14-40d")
         risk = RiskResult(score=30, category="high", factors={})
 
         result = compute_listing_strategy(cleaned, velocity, risk, quick_price=85.50)
@@ -449,7 +449,7 @@ class TestListingStrategy:
         cleaned = CleanedComps(clean_total=25, cv=0.15)
         velocity = VelocityResult(score=50, sales_per_day=0.5,
                                   category="healthy", market_sale_interval_days=2.0,
-                                  estimated_days_to_sell=2.0)
+                                  estimated_days_to_sell="~2d")
         risk = RiskResult(score=75, category="low", factors={})
 
         result = compute_listing_strategy(cleaned, velocity, risk, quick_price=85.50)

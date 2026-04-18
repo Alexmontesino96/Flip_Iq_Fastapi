@@ -103,7 +103,7 @@ class VelocityOut(BaseModel):
     sales_per_day: float
     category: str
     market_sale_interval_days: float | None
-    estimated_days_to_sell: float | None
+    estimated_days_to_sell: str | None
 
 
 class RiskOut(BaseModel):

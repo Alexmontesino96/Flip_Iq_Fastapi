@@ -656,7 +656,7 @@ class TestAIExplanationComparison:
             score: int = 70
             category: str = "medium"
             sales_per_day: float = 1.0
-            estimated_days_to_sell: float = 5.0
+            estimated_days_to_sell: str = "~1d"
             market_sale_interval_days: float = 1.0
             factors: dict = None
             hhi: float = 0.1
