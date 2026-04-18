@@ -35,18 +35,29 @@ def compute_pricing(cleaned: CleanedComps) -> PricingResult:
     iqr = cleaned.iqr
     cv = cleaned.cv
 
-    # quick_list = max(p25, median - 0.30 * IQR)
-    quick_list = max(p25, median - 0.30 * iqr)
+    # Cuando IQR ≈ 0 (todos los comps al mismo precio), usar 7.5% de la
+    # mediana como spread mínimo para que quick/stretch no colapsen.
+    min_spread = median * 0.075
+    spread = 0.30 * iqr
+    use_min_spread = spread < median * 0.01
 
-    # market_list = mediana
-    market_list = median
-
-    # stretch_list = min(p75, median + 0.30 * IQR) si CV < 0.45, sino = market_list
-    stretch_allowed = cv < 0.45
-    if stretch_allowed:
-        stretch_list = min(p75, median + 0.30 * iqr)
+    if use_min_spread:
+        spread = min_spread
+        # p25/p75 also collapse, so skip clamping
+        quick_list = median - spread
+        market_list = median
+        stretch_allowed = True
+        stretch_list = median + spread
     else:
-        stretch_list = market_list
+        # quick_list = max(p25, median - spread)
+        quick_list = max(p25, median - spread)
+        market_list = median
+        # stretch_list = min(p75, median + spread) si CV < 0.45, sino = market_list
+        stretch_allowed = cv < 0.45
+        if stretch_allowed:
+            stretch_list = min(p75, median + spread)
+        else:
+            stretch_list = market_list
 
     return PricingResult(
         quick_list=round(quick_list, 2),

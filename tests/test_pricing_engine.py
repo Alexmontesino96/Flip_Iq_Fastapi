@@ -68,3 +68,17 @@ class TestPricingEngine:
         result = compute_pricing(cleaned)
         assert result.quick_list <= result.market_list
         assert result.market_list <= result.stretch_list
+
+    def test_zero_iqr_uses_minimum_spread(self):
+        """When IQR=0 (all comps same price), prices should NOT collapse."""
+        cleaned = _make_cleaned(
+            median=105.20, p25=105.20, p75=105.20, iqr=0.0, cv=0.0, n=3,
+        )
+        result = compute_pricing(cleaned)
+        assert result.market_list == 105.20
+        # quick and stretch should differ from market
+        assert result.quick_list < result.market_list
+        assert result.stretch_list > result.market_list
+        # spread ≈ 7.5% of median
+        assert result.quick_list == round(105.20 - 105.20 * 0.075, 2)
+        assert result.stretch_list == round(105.20 + 105.20 * 0.075, 2)
