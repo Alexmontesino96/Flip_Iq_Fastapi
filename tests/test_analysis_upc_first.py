@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.services.marketplace.base import CompsResult, MarketplaceListing
+from app.services.analysis_service import _simplify_upc_title
 
 
 def _make_listings(n: int = 50) -> list[MarketplaceListing]:
@@ -41,6 +42,16 @@ def _mock_db():
 
 # Patch settings.keepa_api_key=None para que Amazon no entre en el flujo
 _KEEPA_PATCH = patch("app.services.analysis_service.settings.keepa_api_key", None)
+
+
+class TestUpcTitleSimplification:
+    def test_shoe_retail_title_removes_gender_category_and_colorway(self):
+        title = "Mens adidas Adizero EVO SL Athletic Shoe - Core Black / White / Core Black"
+        assert _simplify_upc_title(title) == "adidas Adizero EVO SL"
+
+    def test_existing_specific_running_shoe_title_stays_searchable(self):
+        title = "ASICS GEL-Nimbus(r) 28 Men's Running Shoes Black/Feather Grey : 7 D - Medium, Synthetic"
+        assert _simplify_upc_title(title) == "ASICS GEL-Nimbus 28"
 
 
 class TestUpcFirstLimits:
@@ -178,6 +189,49 @@ class TestUpcFallback:
             calls = mock_ebay.get_sold_comps.call_args_list
             assert len(calls) == 2
             # Second call is keyword fallback
+            assert calls[1].kwargs.get("keyword") == "Nintendo Switch OLED"
+
+    @pytest.mark.asyncio
+    async def test_upc_fallback_when_raw_comps_cleanup_to_zero(self):
+        """When UPC raw comps are unusable after cleanup, falls back to keyword."""
+        now = datetime.now(timezone.utc)
+        wrong_condition_comps = CompsResult.from_listings(
+            [
+                MarketplaceListing(
+                    title="Nintendo Switch OLED used",
+                    price=250.0,
+                    total_price=250.0,
+                    condition="Pre-Owned",
+                    ended_at=now,
+                    marketplace="ebay",
+                )
+            ],
+            marketplace="ebay",
+            days=30,
+        )
+        kw_comps = _make_comps(100)
+        mock_ebay = AsyncMock()
+        mock_ebay.get_sold_comps = AsyncMock(side_effect=[wrong_condition_comps, kw_comps])
+
+        with (
+            _KEEPA_PATCH,
+            patch("app.services.analysis_service._get_ebay_client", return_value=mock_ebay),
+            patch("app.services.analysis_service.lookup_upc", new_callable=AsyncMock, return_value={"title": "Nintendo Switch OLED"}),
+            patch("app.services.analysis_service.categorize_product", new_callable=AsyncMock, return_value=None),
+            patch("app.services.analysis_service.enrich_listings", new_callable=AsyncMock, side_effect=lambda comps, **kw: comps),
+            patch("app.services.analysis_service.filter_comps_by_relevance", new_callable=AsyncMock, side_effect=lambda comps, kw: comps),
+            patch("app.services.analysis_service.generate_explanation", new_callable=AsyncMock, return_value="Test explanation"),
+        ):
+            from app.services.analysis_service import run_analysis
+            await run_analysis(
+                db=_mock_db(), barcode="045496596439", keyword=None,
+                cost_price=200.0, marketplace="ebay", condition="new",
+            )
+
+            calls = mock_ebay.get_sold_comps.call_args_list
+            assert len(calls) == 2
+            assert calls[0].kwargs.get("barcode") == "045496596439"
+            assert calls[1].kwargs.get("barcode") is None
             assert calls[1].kwargs.get("keyword") == "Nintendo Switch OLED"
 
     @pytest.mark.asyncio

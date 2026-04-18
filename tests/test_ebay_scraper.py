@@ -287,6 +287,14 @@ class TestParsePrice:
     def test_price_integer(self):
         assert _parse_price("$50") == 50.0
 
+    def test_us_dollar_marker(self):
+        assert _parse_price("US $79.50") == 79.50
+
+    def test_non_usd_currency_is_rejected(self):
+        assert _parse_price("R$396,94") == 0.0
+        assert _parse_price("€120,00") == 0.0
+        assert _parse_price("C $89.99") == 0.0
+
 
 class TestParseShipping:
     def test_free_shipping(self):
@@ -1128,6 +1136,8 @@ class TestScrapeSoldListingsConditionParams:
         call_kwargs = mock_client.get.call_args
         params = call_kwargs.kwargs.get("params") or call_kwargs[1].get("params")
         assert params["LH_ItemCondition"] == _EBAY_CONDITION_IDS["new"]
+        assert params["LH_PrefLoc"] == "1"
+        assert params["_fcid"] == "1"
         assert params["_sop"] == "13"
         assert params["rt"] == "nc"
 

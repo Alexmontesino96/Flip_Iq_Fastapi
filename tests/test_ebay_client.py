@@ -261,6 +261,73 @@ async def test_get_sold_comps_passes_condition_kwarg(ebay_client):
     assert comps.total_sold == 2
 
 
+@pytest.mark.asyncio
+async def test_apify_request_uses_current_actor_input_schema(ebay_client):
+    """El actor actual usa count/daysToScrape/itemCondition, no maxItems/condition."""
+    ebay_client._data_source = "apify"
+    ebay_client._token = "test_token"
+    mock_resp = _mock_httpx_response(SAMPLE_APIFY_RESPONSE)
+
+    with patch("httpx.AsyncClient") as MockClient:
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_resp)
+        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        comps = await ebay_client.get_sold_comps(
+            keyword="roller blades",
+            days=45,
+            limit=20,
+            condition="new",
+            category_id=888,
+        )
+
+    assert comps.total_sold == 2
+    body = mock_client.post.call_args.kwargs["json"]
+    assert body["keyword"] == "roller blades"
+    assert body["count"] == 20
+    assert body["daysToScrape"] == 45
+    assert body["categoryId"] == "888"
+    assert body["itemLocation"] == "domestic"
+    assert body["itemCondition"] == "new"
+    assert body["currencyMode"] == "USD"
+    assert "maxItems" not in body
+    assert "condition" not in body
+    params = mock_client.post.call_args.kwargs["params"]
+    assert params["maxItems"] == "20"
+    assert "maxTotalChargeUsd" not in params
+
+
+@pytest.mark.asyncio
+async def test_apify_billing_limit_has_specific_error_reason(ebay_client):
+    """HTTP 402 de Apify no debe verse como CAPTCHA genérico."""
+    import httpx as _httpx
+
+    ebay_client._data_source = "apify"
+    ebay_client._token = "test_token"
+    mock_request = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 402
+    mock_resp.text = "not-enough-usage-to-run-paid-actor"
+    mock_resp.raise_for_status.side_effect = _httpx.HTTPStatusError(
+        "402", request=mock_request, response=mock_resp
+    )
+
+    with patch("httpx.AsyncClient") as MockClient:
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_resp)
+        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        comps = await ebay_client.get_sold_comps(keyword="roller blades", limit=20)
+
+    assert comps.total_sold == 0
+    assert comps.scrape_source == "apify"
+    assert comps.scrape_status == "blocked"
+    assert comps.error_reason == "billing_limit"
+    assert any("usage credits" in warning for warning in comps.warnings)
+
+
 # ── Test de integración (requiere APIFY_TOKEN en .env) ──────────────
 
 
@@ -273,6 +340,8 @@ async def test_integration_real_apify():
     """
     client = EbayClient()
     comps = await client.get_sold_comps(keyword="iphone 15 pro", days=30, limit=5)
+    if comps.error_reason in ("billing_limit", "missing_token"):
+        pytest.skip(f"Apify integration unavailable: {comps.error_reason}")
     assert comps.total_sold > 0
     assert comps.avg_price > 0
     for listing in comps.listings:

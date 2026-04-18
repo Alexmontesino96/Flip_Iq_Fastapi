@@ -101,13 +101,47 @@ def _get_headers() -> dict[str, str]:
     }
 
 
+_NON_USD_CURRENCY_MARKERS = (
+    "R$", "R $", "BRL",
+    "€", "EUR",
+    "£", "GBP",
+    "C$", "C $", "CA$", "CA $", "CAD",
+    "A$", "A $", "AU$", "AU $", "AUD",
+    "MX$", "MXN",
+    "¥", "JPY", "CNY",
+)
+
+
+def _has_non_usd_currency(text: str) -> bool:
+    upper = text.upper().replace("\xa0", " ")
+    return any(marker in upper for marker in _NON_USD_CURRENCY_MARKERS)
+
+
 def _parse_price(text: str | None) -> float:
     """Extrae precio numérico de texto como '$208.48' o '$1,299.99'."""
     if not text:
         return 0.0
-    match = re.search(r"\$?([\d,]+\.?\d*)", text.strip())
+    stripped = text.strip()
+    if _has_non_usd_currency(stripped):
+        return 0.0
+    match = re.search(r"(\d[\d.,\s]*\d|\d)", stripped)
     if match:
-        return float(match.group(1).replace(",", ""))
+        value = re.sub(r"\s+", "", match.group(1))
+        if "." in value and "," in value:
+            # Use the rightmost separator as decimal separator.
+            if value.rfind(",") > value.rfind("."):
+                value = value.replace(".", "").replace(",", ".")
+            else:
+                value = value.replace(",", "")
+        elif "," in value:
+            parts = value.split(",")
+            if len(parts) == 2 and len(parts[1]) in (1, 2):
+                value = value.replace(",", ".")
+            else:
+                value = value.replace(",", "")
+        elif value.count(".") > 1:
+            value = value.replace(".", "")
+        return float(value)
     return 0.0
 
 
@@ -462,7 +496,8 @@ async def scrape_sold_listings(
                 "_nkw": _build_search_query(keyword, exclude_terms),
                 "LH_Sold": "1",
                 "LH_Complete": "1",
-                "LH_PrefLoc": "2",   # US-only item location
+                "LH_PrefLoc": "1",   # US-only item location
+                "_fcid": "1",        # US site/location context
                 "_ipg": str(items_per_page),
                 "_sop": "13",        # ended recently first
                 "rt": "nc",          # no cache

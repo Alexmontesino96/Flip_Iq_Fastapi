@@ -144,7 +144,20 @@ _COLOR_WORDS = {
     "coral", "ivory", "cream", "arctic", "feather", "pearl", "midnight",
     "velvet", "morganite", "charcoal", "rose", "aqua", "indigo", "olive",
     "platinum", "bronze", "copper", "magenta", "crimson", "slate", "onyx",
+    "lime", "volt",
 }
+
+_COLOR_MODIFIERS = {
+    "core", "cloud", "collegiate", "ftwr", "footwear", "team", "solar",
+    "wonder", "carbon",
+}
+
+_COLOR_TRAILING_RE = (
+    r"(?:" + "|".join(sorted(_COLOR_WORDS | _COLOR_MODIFIERS, key=len, reverse=True)) + r")"
+    r"(?:[/\s-]+(?:"
+    + "|".join(sorted(_COLOR_WORDS | _COLOR_MODIFIERS, key=len, reverse=True))
+    + r"))*"
+)
 
 
 def _simplify_upc_title(title: str) -> str:
@@ -158,21 +171,35 @@ def _simplify_upc_title(title: str) -> str:
     t = re.sub(r"[®™©]|\(r\)|\(tm\)", "", title, flags=re.IGNORECASE)
     # Quitar todo después de ":" o "|" (suele ser talla/color/specs)
     t = re.split(r"[:|]", t)[0]
+    # Quitar sufijos retail de color/specs después de guion:
+    # "Adizero EVO SL Athletic Shoe - Core Black / White / Core Black"
+    t = re.sub(r"\s+-\s+" + _COLOR_TRAILING_RE + r"\s*$", "", t, flags=re.IGNORECASE)
     # Quitar patrones de talla: "Size 7", "Sz 11", "7 D - Medium", etc.
     t = re.sub(r"\b(?:size|sz)\s*\d+[.\d]*\s*\w*\b", "", t, flags=re.IGNORECASE)
     t = re.sub(r"\b\d+\s*D\s*-\s*\w+\b", "", t)
     # Quitar material suelto
     t = re.sub(r",?\s*\b(Synthetic|Leather|Mesh|Canvas|Suede|Rubber|Nylon|Polyester)\b", "", t, flags=re.IGNORECASE)
+    # Quitar genero y nouns retail que no ayudan en eBay.
+    t = re.sub(
+        r"\b(?:men(?:['’?]?s)?|women(?:['’?]?s)?|mens|womens|boys|girls|youth|kids|unisex)\b",
+        "",
+        t,
+        flags=re.IGNORECASE,
+    )
+    t = re.sub(
+        r"\b(?:(?:athletic|running|training|walking|casual)\s+)?"
+        r"(?:shoe|shoes|sneaker|sneakers|trainer|trainers|footwear)\b",
+        "",
+        t,
+        flags=re.IGNORECASE,
+    )
     # Quitar trailing color phrase (e.g. "Black/Feather Grey")
     # Match a final run of color words separated by spaces or /
-    t = re.sub(
-        r"\s+(?:" + "|".join(_COLOR_WORDS) + r")(?:[/\s]+(?:" + "|".join(_COLOR_WORDS) + r"))*\s*$",
-        "", t, flags=re.IGNORECASE,
-    )
+    t = re.sub(r"\s+" + _COLOR_TRAILING_RE + r"\s*$", "", t, flags=re.IGNORECASE)
     # Limpiar puntuación trailing y espacios
     t = re.sub(r"[,\-/]+\s*$", "", t)
     t = re.sub(r"\s{2,}", " ", t).strip()
-    return t if len(t) >= 5 else title
+    return t if len(t) >= 8 and len(t.split()) >= 2 else title
 
 
 def _clean_search_keyword(keyword: str) -> tuple[str, str | None]:
@@ -779,6 +806,7 @@ async def run_analysis(
     # (condición correcta, sin ruido). Keyword trae items de otras condiciones
     # que contaminan la mediana de precio.
     upc_hit = bool(barcode and ebay_raw.listings)
+    used_keyword_fallback = False
     if barcode and not ebay_raw.listings:
         # Fallback keyword: search_keyword (de UPC lookup) o título de Amazon/Keepa
         fallback_kw = search_keyword
@@ -788,6 +816,7 @@ async def run_analysis(
             logger.info("Usando título de Amazon como fallback keyword: '%s'", fallback_kw)
         if fallback_kw and fallback_kw != barcode:
             logger.info("eBay barcode sin resultados, fallback keyword='%s'", fallback_kw)
+            used_keyword_fallback = True
             try:
                 ebay_raw = await ebay.get_sold_comps(
                     keyword=fallback_kw, days=30, limit=ebay_limit,
@@ -838,6 +867,49 @@ async def run_analysis(
         ebay_raw, marketplace_name="ebay", enriched=ebay_enriched, **pipeline_kwargs,
     )
 
+    # Si la busqueda UPC devolvio algo bruto pero nada util tras cleanup
+    # (moneda no-USD, condicion incorrecta, placeholders, etc.), intentar el titulo UPC.
+    if (
+        barcode
+        and search_keyword
+        and upc_hit
+        and not used_keyword_fallback
+        and (
+            not ebay_pipeline.has_valid_comps
+            or ebay_pipeline.cleaned.pricing_basis == "mixed_conditions"
+        )
+    ):
+        logger.info(
+            "eBay UPC raw comps unusable after cleanup, fallback keyword='%s'",
+            search_keyword,
+        )
+        try:
+            ebay_raw_kw = await ebay.get_sold_comps(
+                keyword=search_keyword, days=30, limit=ebay_limit,
+                condition=condition, category_id=ebay_category_id,
+            )
+            ebay_enriched_kw = False
+            if ebay_raw_kw.listings:
+                ebay_raw_kw = await enrich_listings(
+                    ebay_raw_kw, keyword=search_keyword,
+                )
+                ebay_enriched_kw = True
+                ebay_raw_kw = await filter_comps_by_relevance(
+                    ebay_raw_kw, search_keyword,
+                )
+            ebay_pipeline_kw = _run_pipeline(
+                ebay_raw_kw, marketplace_name="ebay",
+                enriched=ebay_enriched_kw, **pipeline_kwargs,
+            )
+            if ebay_pipeline_kw.cleaned.clean_total > ebay_pipeline.cleaned.clean_total:
+                ebay_raw = ebay_raw_kw
+                ebay_pipeline = ebay_pipeline_kw
+                ebay_enriched = ebay_enriched_kw
+                upc_hit = False
+                used_keyword_fallback = True
+        except Exception as e:
+            logger.warning("eBay post-cleanup keyword fallback failed: %s", e)
+
     # -----------------------------------------------------------------------
     # 3b. Re-fetch eBay si pocos comps limpios (buscar más páginas)
     # -----------------------------------------------------------------------
@@ -855,8 +927,9 @@ async def run_analysis(
             ebay_pipeline.cleaned.clean_total, _MIN_CLEAN_COMPS, refetch_limit,
         )
         try:
+            refetch_barcode = barcode if upc_hit else None
             ebay_raw2 = await ebay.get_sold_comps(
-                barcode=barcode, keyword=search_keyword, days=30,
+                barcode=refetch_barcode, keyword=search_keyword, days=30,
                 limit=refetch_limit, condition=condition,
                 category_id=ebay_category_id,
             )
@@ -1038,7 +1111,9 @@ async def run_analysis(
 
     if has_valid_comps:
         estimated_sale = primary.pricing.market_list
-        own_data_markets = {"ebay"}
+        own_data_markets = set()
+        if ebay_pipeline.has_valid_comps:
+            own_data_markets.add("ebay")
         if amazon_pipeline and amazon_pipeline.has_valid_comps:
             own_data_markets.add("amazon_fba")
         channels = _calculate_all_channels(

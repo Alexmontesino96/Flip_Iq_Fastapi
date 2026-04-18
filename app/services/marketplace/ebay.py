@@ -84,6 +84,14 @@ def _map_listing(item: dict) -> MarketplaceListing | None:
     )
 
 
+def _warnings_for_fetch_error(error_reason: str | None) -> list[str]:
+    if error_reason == "billing_limit":
+        return [
+            "Apify fallback could not run because the account has insufficient usage credits."
+        ]
+    return []
+
+
 UPC_LOOKUP_URL = "https://api.upcitemdb.com/prod/trial/lookup"
 
 
@@ -216,7 +224,9 @@ class EbayClient(MarketplaceClient):
             if data is None and self._token:
                 logger.info("Scraper directo falló, intentando Apify para '%s'", query)
                 fallback_used = True
-                data = await self._fetch_via_apify(query, limit, condition=cond, category_id=category_id)
+                data = await self._fetch_via_apify(
+                    query, limit, days=days, condition=cond, category_id=category_id
+                )
                 _record_attempt("apify", data)
         elif self._data_source == "scraper":
             data = await self._fetch_via_scraper(query, limit, condition=cond, category_id=category_id)
@@ -228,7 +238,9 @@ class EbayClient(MarketplaceClient):
             if data is None and self._token:
                 logger.info("Scraper falló, intentando fallback a Apify para '%s'", query)
                 fallback_used = True
-                data = await self._fetch_via_apify(query, limit, condition=cond, category_id=category_id)
+                data = await self._fetch_via_apify(
+                    query, limit, days=days, condition=cond, category_id=category_id
+                )
                 _record_attempt("apify", data)
                 logger.info(
                     "Apify fallback result: %d items for '%s'",
@@ -237,7 +249,9 @@ class EbayClient(MarketplaceClient):
         else:
             # data_source == "apify"
             logger.info("Usando Apify directo (data_source='apify')")
-            data = await self._fetch_via_apify(query, limit, condition=cond, category_id=category_id)
+            data = await self._fetch_via_apify(
+                query, limit, days=days, condition=cond, category_id=category_id
+            )
             _record_attempt("apify", data)
 
         if not data:
@@ -265,6 +279,7 @@ class EbayClient(MarketplaceClient):
                     "requested_condition": condition,
                     "category_id": category_id,
                 },
+                warnings=_warnings_for_fetch_error(error_reason),
             )
 
         listings = self._map_and_filter(data, min_price, max_price)
@@ -434,7 +449,7 @@ class EbayClient(MarketplaceClient):
         return None
 
     async def _fetch_via_apify(
-        self, query: str, limit: int, condition: str | None = None,
+        self, query: str, limit: int, days: int = 30, condition: str | None = None,
         category_id: int | None = None,
     ) -> list[dict] | None:
         """Obtiene datos via Apify. Retorna None si falla."""
@@ -448,21 +463,26 @@ class EbayClient(MarketplaceClient):
             return None
 
         limit = max(1, limit)
+        days = max(1, min(days or 30, 90))
+        apify_condition = condition if condition in {"new", "used"} else "any"
         actor_input = {
             "keyword": query,
-            "maxItems": limit,
+            "count": limit,
+            "daysToScrape": days,
+            "categoryId": str(category_id or 0),
+            "ebaySite": "ebay.com",
+            "sortOrder": "endedRecently",
+            "itemLocation": "domestic",
+            "itemCondition": apify_condition,
+            "currencyMode": "USD",
             "detailedSearch": False,
         }
-        if condition is not None:
-            actor_input["condition"] = condition
-        if category_id is not None:
-            actor_input["categoryId"] = category_id
 
         try:
             async with httpx.AsyncClient(timeout=APIFY_TIMEOUT) as client:
                 resp = await client.post(
                     APIFY_RUN_URL,
-                    params={"token": self._token, "maxTotalChargeUsd": "5"},
+                    params={"token": self._token, "maxItems": str(limit)},
                     json=actor_input,
                 )
                 resp.raise_for_status()
@@ -477,10 +497,11 @@ class EbayClient(MarketplaceClient):
             return None
         except httpx.HTTPStatusError as e:
             logger.error("Apify HTTP error %s: %s", e.response.status_code, e.response.text[:200])
+            error_reason = "billing_limit" if e.response.status_code == 402 else f"http_{e.response.status_code}"
             self._last_fetch_meta = {
                 "source": "apify",
                 "status": "blocked",
-                "error_reason": f"http_{e.response.status_code}",
+                "error_reason": error_reason,
             }
             return None
         except Exception as e:
