@@ -18,8 +18,8 @@ from app.services.marketplace.base import CompsResult
 
 logger = logging.getLogger(__name__)
 
-# Batches de 60 títulos: son títulos cortos (~10-15 palabras), Gemini Flash los maneja sin problema.
-_LLM_BATCH_SIZE = 60
+# Batches de 30 títulos: balance entre velocidad y timeout de Gemini.
+_LLM_BATCH_SIZE = 30
 # Concurrencia: 4 batches simultáneos
 _LLM_CONCURRENCY = 4
 
@@ -213,7 +213,7 @@ async def _llm_extract_batch(
         ],
         max_tokens=8192,
         temperature=0.1,
-        timeout=30,
+        timeout=45,
     )
 
     raw_text = response.choices[0].message.content.strip()
