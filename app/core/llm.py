@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 _GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 _GEMINI_MODEL = "gemini-2.5-flash"
-_GEMINI_MODEL_FAST = "gemini-2.0-flash"
+_GEMINI_MODEL_FAST = "gemini-2.5-flash-lite"
 _OPENAI_MODEL = "gpt-4o-mini"
 
 # Flag por proceso: si Gemini falla, desactivar para evitar más errores
