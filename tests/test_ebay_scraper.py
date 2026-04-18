@@ -570,77 +570,31 @@ class TestScrapeSoldListings:
 
 class TestEbayClientFallback:
     @pytest.mark.asyncio
-    async def test_scraper_failure_falls_back_to_apify(self):
-        """Si el scraper falla, debe usar Apify como fallback."""
+    async def test_scraper_failure_returns_empty(self):
+        """Si el scraper falla, retorna CompsResult vacío."""
         from app.services.marketplace.ebay import EbayClient
 
         client = EbayClient()
         client._data_source = "scraper"
-        client._token = "fake-token"
-
-        apify_data = [
-            {
-                "title": "iPhone 15 Pro from Apify",
-                "soldPrice": "800.00",
-                "shippingPrice": "0",
-                "totalPrice": "800.00",
-                "endedAt": "2026-04-10T00:00:00.000Z",
-                "condition": "Pre-Owned",
-                "url": "https://www.ebay.com/itm/111111111",
-                "itemId": "111111111",
-            }
-        ]
 
         with patch(
             "app.services.marketplace.ebay.scrape_sold_listings",
             side_effect=HTTPError("429 Too Many Requests"),
-        ), patch.object(
-            client, "_fetch_via_apify", new_callable=AsyncMock, return_value=apify_data,
         ):
             result = await client.get_sold_comps(keyword="iPhone 15 Pro")
 
-        assert result.total_sold == 1
-        assert result.listings[0].title == "iPhone 15 Pro from Apify"
-        assert result.scrape_source == "apify"
-        assert result.scrape_status == "ok"
-        assert result.fallback_used is True
+        assert result.total_sold == 0
+        assert result.scrape_source == "scraper"
+        assert result.scrape_status == "blocked"
         assert result.query_used == "iPhone 15 Pro"
 
     @pytest.mark.asyncio
-    async def test_apify_mode_skips_scraper(self):
-        """Con data_source=apify, debe ir directo a Apify sin intentar scraper."""
-        from app.services.marketplace.ebay import EbayClient
-
-        client = EbayClient()
-        client._data_source = "apify"
-        client._token = "fake-token"
-
-        apify_data = [
-            {
-                "title": "iPhone from Apify",
-                "soldPrice": "750.00",
-                "totalPrice": "750.00",
-            }
-        ]
-
-        with patch(
-            "app.services.marketplace.ebay.scrape_sold_listings",
-        ) as mock_scraper, patch.object(
-            client, "_fetch_via_apify", new_callable=AsyncMock, return_value=apify_data,
-        ):
-            result = await client.get_sold_comps(keyword="iPhone")
-
-        mock_scraper.assert_not_called()
-        assert result.total_sold == 1
-
-    @pytest.mark.asyncio
-    async def test_scraper_success_no_apify_call(self):
-        """Si el scraper funciona, no debe llamar a Apify."""
+    async def test_scraper_success(self):
+        """Scraper funciona correctamente."""
         from app.services.marketplace.ebay import EbayClient
 
         client = EbayClient()
         client._data_source = "scraper"
-        client._token = "fake-token"
 
         scraper_data = [
             {
@@ -657,12 +611,9 @@ class TestEbayClientFallback:
             "app.services.marketplace.ebay.scrape_sold_listings",
             new_callable=AsyncMock,
             return_value=scraper_data,
-        ), patch.object(
-            client, "_fetch_via_apify", new_callable=AsyncMock,
-        ) as mock_apify:
+        ):
             result = await client.get_sold_comps(keyword="iPhone")
 
-        mock_apify.assert_not_called()
         assert result.total_sold == 1
         assert result.listings[0].title == "iPhone from Scraper"
 
@@ -683,7 +634,7 @@ class TestEbayClientFallback:
 
         client = EbayClient()
         client._data_source = "scraper"
-        client._token = None
+
 
         with patch(
             "app.services.marketplace.ebay.scrape_sold_listings",
@@ -699,30 +650,23 @@ class TestEbayClientFallback:
         assert result.diagnostics["attempts"][0]["status"] == "empty"
 
     @pytest.mark.asyncio
-    async def test_scraper_blocked_fallback_metadata(self):
+    async def test_scraper_blocked_returns_empty_with_metadata(self):
         from app.services.marketplace.ebay import EbayClient
         from app.services.marketplace.ebay_scraper import EbayScraperBlocked
 
         client = EbayClient()
         client._data_source = "scraper"
-        client._token = "fake-token"
-
-        apify_data = [
-            {"title": "Fallback item", "soldPrice": "50.00", "totalPrice": "50.00"}
-        ]
 
         with patch(
             "app.services.marketplace.ebay.scrape_sold_listings",
             side_effect=EbayScraperBlocked("challenge"),
-        ), patch.object(
-            client, "_fetch_via_apify", new_callable=AsyncMock, return_value=apify_data,
         ):
             result = await client.get_sold_comps(keyword="blocked query")
 
-        assert result.scrape_source == "apify"
-        assert result.fallback_used is True
-        assert result.diagnostics["attempts"][0]["status"] == "blocked"
-        assert any("fallback" in warning.lower() for warning in result.warnings)
+        assert result.total_sold == 0
+        assert result.scrape_source == "scraper"
+        assert result.scrape_status == "blocked"
+        assert result.diagnostics["attempts"][0]["source"] == "scraper"
 
     @pytest.mark.asyncio
     async def test_condition_propagated_to_scraper(self):
@@ -731,7 +675,7 @@ class TestEbayClientFallback:
 
         client = EbayClient()
         client._data_source = "scraper"
-        client._token = None
+
 
         scraper_data = [
             {"title": f"iPhone {i}", "soldPrice": "800.00", "shippingPrice": "0", "totalPrice": "800.00"}
@@ -756,7 +700,7 @@ class TestEbayClientFallback:
 
         client = EbayClient()
         client._data_source = "scraper"
-        client._token = None
+
 
         scraper_data = [
             {"title": f"iPhone {i}", "soldPrice": "800.00", "totalPrice": "800.00"}
@@ -780,7 +724,7 @@ class TestEbayClientFallback:
 
         client = EbayClient()
         client._data_source = "scraper"
-        client._token = None
+
 
         scraper_data = [
             {"title": f"Switch {i}", "soldPrice": "200.00", "shippingPrice": "0", "totalPrice": "200.00"}
@@ -805,7 +749,7 @@ class TestEbayClientFallback:
 
         client = EbayClient()
         client._data_source = "scraper"
-        client._token = None
+
 
         scraper_data = [
             {"title": f"Switch {i}", "soldPrice": "200.00", "shippingPrice": "0", "totalPrice": "200.00"}

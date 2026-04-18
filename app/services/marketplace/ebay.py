@@ -1,8 +1,7 @@
-"""Cliente eBay: scraper directo (default) con fallback a Apify.
+"""Cliente eBay: scraper directo con pool de RPi proxies.
 
 Usa scraper propio (curl_cffi + BeautifulSoup) para obtener ventas completadas de eBay.
-Si el scraper falla (429, CAPTCHA, etc.), cae a Apify como fallback si hay token.
-Configurable via EBAY_DATA_SOURCE env var: "scraper" (default) | "apify" | "rpi".
+Configurable via EBAY_DATA_SOURCE env var: "scraper" (default) | "rpi".
 """
 
 import itertools
@@ -16,12 +15,6 @@ from app.services.marketplace.base import CompsResult, MarketplaceClient, Market
 from app.services.marketplace.ebay_scraper import scrape_sold_listings
 
 logger = logging.getLogger(__name__)
-
-APIFY_ACTOR = "caffein.dev~ebay-sold-listings"
-APIFY_RUN_URL = (
-    f"https://api.apify.com/v2/acts/{APIFY_ACTOR}/run-sync-get-dataset-items"
-)
-APIFY_TIMEOUT = 25  # segundos (Apify típicamente tarda 5-10s)
 
 
 def _parse_float(value) -> float:
@@ -47,7 +40,7 @@ def _parse_datetime(value: str | None) -> datetime | None:
 
 
 def _map_listing(item: dict) -> MarketplaceListing | None:
-    """Convierte un item del dataset de Apify a MarketplaceListing."""
+    """Convierte un item del dataset del scraper a MarketplaceListing."""
     title = item.get("title", "")
     if not title:
         return None
@@ -84,13 +77,6 @@ def _map_listing(item: dict) -> MarketplaceListing | None:
     )
 
 
-def _warnings_for_fetch_error(error_reason: str | None) -> list[str]:
-    if error_reason == "billing_limit":
-        return [
-            "Apify fallback could not run because the account has insufficient usage credits."
-        ]
-    return []
-
 
 UPC_LOOKUP_URL = "https://api.upcitemdb.com/prod/trial/lookup"
 
@@ -124,10 +110,9 @@ async def lookup_upc(barcode: str) -> dict | None:
 
 
 class EbayClient(MarketplaceClient):
-    """Cliente de eBay: scraper directo (default) con fallback a Apify."""
+    """Cliente de eBay: scraper directo con pool de RPi proxies."""
 
     def __init__(self) -> None:
-        self._token = settings.apify_token
         self._data_source = settings.ebay_data_source
         self._rpi_api_key = settings.rpi_scraper_api_key
         self._proxy_url = settings.residential_proxy_url or None
@@ -159,8 +144,6 @@ class EbayClient(MarketplaceClient):
         category_id: int | None = None,
     ) -> CompsResult:
         """Obtiene ventas completadas reales de eBay.
-
-        Usa scraper directo como default, Apify como fallback.
 
         Args:
             barcode: UPC/EAN del producto.
@@ -221,38 +204,14 @@ class EbayClient(MarketplaceClient):
                 fallback_used = True
                 data = await self._fetch_via_scraper(query, limit, condition=cond, category_id=category_id)
                 _record_attempt("scraper", data)
-            if data is None and self._token:
-                logger.info("Scraper directo falló, intentando Apify para '%s'", query)
-                fallback_used = True
-                data = await self._fetch_via_apify(
-                    query, limit, days=days, condition=cond, category_id=category_id
-                )
-                _record_attempt("apify", data)
-        elif self._data_source == "scraper":
+        else:
+            # data_source == "scraper" (default)
             data = await self._fetch_via_scraper(query, limit, condition=cond, category_id=category_id)
             _record_attempt("scraper", data)
             logger.info(
                 "Scraper result: %d items for '%s'",
                 len(data) if data else 0, query,
             )
-            if data is None and self._token:
-                logger.info("Scraper falló, intentando fallback a Apify para '%s'", query)
-                fallback_used = True
-                data = await self._fetch_via_apify(
-                    query, limit, days=days, condition=cond, category_id=category_id
-                )
-                _record_attempt("apify", data)
-                logger.info(
-                    "Apify fallback result: %d items for '%s'",
-                    len(data) if data else 0, query,
-                )
-        else:
-            # data_source == "apify"
-            logger.info("Usando Apify directo (data_source='apify')")
-            data = await self._fetch_via_apify(
-                query, limit, days=days, condition=cond, category_id=category_id
-            )
-            _record_attempt("apify", data)
 
         if not data:
             logger.warning("eBay: 0 items para '%s' después de todos los intentos", query)
@@ -279,7 +238,6 @@ class EbayClient(MarketplaceClient):
                     "requested_condition": condition,
                     "category_id": category_id,
                 },
-                warnings=_warnings_for_fetch_error(error_reason),
             )
 
         listings = self._map_and_filter(data, min_price, max_price)
@@ -308,10 +266,6 @@ class EbayClient(MarketplaceClient):
         if fallback_used:
             result.warnings.append(
                 "eBay scraper fallback was used; source filters may be less precise."
-            )
-        if source_used == "apify" and (cond or category_id is not None):
-            result.warnings.append(
-                "Apify fallback may not fully preserve eBay condition/category filters."
             )
         return result
 
@@ -447,87 +401,6 @@ class EbayClient(MarketplaceClient):
             "error_reason": "unknown",
         }
         return None
-
-    async def _fetch_via_apify(
-        self, query: str, limit: int, days: int = 30, condition: str | None = None,
-        category_id: int | None = None,
-    ) -> list[dict] | None:
-        """Obtiene datos via Apify. Retorna None si falla."""
-        if not self._token:
-            logger.error("APIFY_TOKEN no configurado")
-            self._last_fetch_meta = {
-                "source": "apify",
-                "status": "empty",
-                "error_reason": "missing_token",
-            }
-            return None
-
-        limit = max(1, limit)
-        days = max(1, min(days or 30, 90))
-        apify_condition = condition if condition in {"new", "used"} else "any"
-        actor_input = {
-            "keyword": query,
-            "count": limit,
-            "daysToScrape": days,
-            "categoryId": str(category_id or 0),
-            "ebaySite": "ebay.com",
-            "sortOrder": "endedRecently",
-            "itemLocation": "domestic",
-            "itemCondition": apify_condition,
-            "currencyMode": "USD",
-            "detailedSearch": False,
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=APIFY_TIMEOUT) as client:
-                resp = await client.post(
-                    APIFY_RUN_URL,
-                    params={"token": self._token, "maxItems": str(limit)},
-                    json=actor_input,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-        except httpx.TimeoutException:
-            logger.error("Apify timeout después de %ds para query='%s'", APIFY_TIMEOUT, query)
-            self._last_fetch_meta = {
-                "source": "apify",
-                "status": "blocked",
-                "error_reason": "timeout",
-            }
-            return None
-        except httpx.HTTPStatusError as e:
-            logger.error("Apify HTTP error %s: %s", e.response.status_code, e.response.text[:200])
-            error_reason = "billing_limit" if e.response.status_code == 402 else f"http_{e.response.status_code}"
-            self._last_fetch_meta = {
-                "source": "apify",
-                "status": "blocked",
-                "error_reason": error_reason,
-            }
-            return None
-        except Exception as e:
-            logger.error("Apify error: %s", e)
-            self._last_fetch_meta = {
-                "source": "apify",
-                "status": "blocked",
-                "error_reason": type(e).__name__,
-            }
-            return None
-
-        if not isinstance(data, list):
-            logger.warning("Apify response no es una lista: %s", type(data))
-            self._last_fetch_meta = {
-                "source": "apify",
-                "status": "blocked",
-                "error_reason": "invalid_response",
-            }
-            return None
-
-        self._last_fetch_meta = {
-            "source": "apify",
-            "status": "ok" if data else "empty",
-            "raw_count": len(data),
-        }
-        return data
 
     @staticmethod
     def _map_and_filter(

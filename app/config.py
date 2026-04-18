@@ -31,11 +31,8 @@ class Settings(BaseSettings):
     # Rate limiting
     rate_limit_per_minute: int = 60
 
-    # Apify
-    apify_token: str = ""
-
     # eBay scraper
-    ebay_data_source: str = "scraper"  # "scraper" (default) | "apify" (fallback) | "rpi" (proxy residencial)
+    ebay_data_source: str = "scraper"  # "scraper" (default) | "rpi" (proxy residencial)
 
     # RPi Scraper Proxy (pool de proxies residenciales)
     # Comma-separated URLs: "https://rpi1.tunnel.com,https://rpi2.tunnel.com"

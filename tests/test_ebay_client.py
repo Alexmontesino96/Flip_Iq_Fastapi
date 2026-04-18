@@ -1,10 +1,9 @@
-"""Tests del cliente eBay con Apify (caffein.dev~ebay-sold-listings).
+"""Tests del cliente eBay (scraper directo + RPi proxies).
 
-Tests unitarios de mapping + mocks de httpx + test de integración.
+Tests unitarios de mapping + mocks del scraper.
 """
 
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -118,10 +117,9 @@ class TestMapListing:
         assert listing.total_price == 110.0
 
 
-# ── Tests con mock de httpx (sin red) ──────────────────────────────
+# ── Tests del EbayClient (mocked scraper) ──────────────────────────
 
-
-SAMPLE_APIFY_RESPONSE = [
+SAMPLE_SCRAPER_DATA = [
     {
         "itemId": "123456789",
         "title": "iPhone 15 Pro 256GB Unlocked",
@@ -147,34 +145,24 @@ SAMPLE_APIFY_RESPONSE = [
 ]
 
 
-def _mock_httpx_response(data, status_code=200):
-    """Crea un mock de httpx.Response (métodos sync como en httpx real)."""
-    resp = MagicMock()
-    resp.status_code = status_code
-    resp.json.return_value = data
-    resp.text = str(data)
-    resp.raise_for_status = MagicMock()
-    return resp
-
-
 @pytest.fixture
 def ebay_client():
     with patch("app.services.marketplace.ebay.settings") as mock_settings:
-        mock_settings.apify_token = "test_token"
+        mock_settings.ebay_data_source = "scraper"
+        mock_settings.rpi_scraper_urls = ""
+        mock_settings.rpi_scraper_api_key = ""
+        mock_settings.residential_proxy_url = ""
         client = EbayClient()
     return client
 
 
 @pytest.mark.asyncio
 async def test_get_sold_comps_with_mock(ebay_client):
-    mock_resp = _mock_httpx_response(SAMPLE_APIFY_RESPONSE)
-
-    with patch("httpx.AsyncClient") as MockClient:
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(return_value=mock_resp)
-        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
-
+    with patch(
+        "app.services.marketplace.ebay.scrape_sold_listings",
+        new_callable=AsyncMock,
+        return_value=SAMPLE_SCRAPER_DATA,
+    ):
         comps = await ebay_client.get_sold_comps(keyword="iphone 15 pro", days=30, limit=50)
 
     assert comps.total_sold == 2
@@ -194,24 +182,13 @@ async def test_get_sold_comps_empty_keyword(ebay_client):
 
 
 @pytest.mark.asyncio
-async def test_get_sold_comps_apify_error(ebay_client):
-    """Apify devuelve error HTTP → retorna CompsResult vacío."""
-    import httpx as _httpx
-
-    mock_request = MagicMock()
-    mock_resp = MagicMock()
-    mock_resp.status_code = 500
-    mock_resp.text = "Internal Server Error"
-    mock_resp.raise_for_status.side_effect = _httpx.HTTPStatusError(
-        "500", request=mock_request, response=mock_resp
-    )
-
-    with patch("httpx.AsyncClient") as MockClient:
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(return_value=mock_resp)
-        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
-
+async def test_get_sold_comps_scraper_error(ebay_client):
+    """Scraper falla → retorna CompsResult vacío."""
+    with patch(
+        "app.services.marketplace.ebay.scrape_sold_listings",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
         comps = await ebay_client.get_sold_comps(keyword="test product")
 
     assert comps.total_sold == 0
@@ -219,132 +196,26 @@ async def test_get_sold_comps_apify_error(ebay_client):
 
 
 @pytest.mark.asyncio
-async def test_get_sold_comps_timeout(ebay_client):
-    """Timeout de Apify → retorna CompsResult vacío."""
-    import httpx as _httpx
-
-    with patch("httpx.AsyncClient") as MockClient:
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(side_effect=_httpx.TimeoutException("timeout"))
-        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
-
+async def test_get_sold_comps_scraper_empty(ebay_client):
+    """Scraper retorna lista vacía → CompsResult vacío."""
+    with patch(
+        "app.services.marketplace.ebay.scrape_sold_listings",
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
         comps = await ebay_client.get_sold_comps(keyword="test")
 
     assert comps.total_sold == 0
 
 
 @pytest.mark.asyncio
-async def test_get_sold_comps_no_token():
-    """Sin APIFY_TOKEN → retorna CompsResult vacío."""
-    with patch("app.services.marketplace.ebay.settings") as mock_settings:
-        mock_settings.apify_token = ""
-        client = EbayClient()
-
-    comps = await client.get_sold_comps(keyword="test")
-    assert comps.total_sold == 0
-
-
-@pytest.mark.asyncio
 async def test_get_sold_comps_passes_condition_kwarg(ebay_client):
-    """Verifica que condition='any' no causa error (compatibilidad)."""
-    mock_resp = _mock_httpx_response(SAMPLE_APIFY_RESPONSE)
-
-    with patch("httpx.AsyncClient") as MockClient:
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(return_value=mock_resp)
-        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
-
+    """Verifica que condition='any' no causa error."""
+    with patch(
+        "app.services.marketplace.ebay.scrape_sold_listings",
+        new_callable=AsyncMock,
+        return_value=SAMPLE_SCRAPER_DATA,
+    ):
         comps = await ebay_client.get_sold_comps(keyword="test", condition="any")
 
     assert comps.total_sold == 2
-
-
-@pytest.mark.asyncio
-async def test_apify_request_uses_current_actor_input_schema(ebay_client):
-    """El actor actual usa count/daysToScrape/itemCondition, no maxItems/condition."""
-    ebay_client._data_source = "apify"
-    ebay_client._token = "test_token"
-    mock_resp = _mock_httpx_response(SAMPLE_APIFY_RESPONSE)
-
-    with patch("httpx.AsyncClient") as MockClient:
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(return_value=mock_resp)
-        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        comps = await ebay_client.get_sold_comps(
-            keyword="roller blades",
-            days=45,
-            limit=20,
-            condition="new",
-            category_id=888,
-        )
-
-    assert comps.total_sold == 2
-    body = mock_client.post.call_args.kwargs["json"]
-    assert body["keyword"] == "roller blades"
-    assert body["count"] == 20
-    assert body["daysToScrape"] == 45
-    assert body["categoryId"] == "888"
-    assert body["itemLocation"] == "domestic"
-    assert body["itemCondition"] == "new"
-    assert body["currencyMode"] == "USD"
-    assert "maxItems" not in body
-    assert "condition" not in body
-    params = mock_client.post.call_args.kwargs["params"]
-    assert params["maxItems"] == "20"
-    assert "maxTotalChargeUsd" not in params
-
-
-@pytest.mark.asyncio
-async def test_apify_billing_limit_has_specific_error_reason(ebay_client):
-    """HTTP 402 de Apify no debe verse como CAPTCHA genérico."""
-    import httpx as _httpx
-
-    ebay_client._data_source = "apify"
-    ebay_client._token = "test_token"
-    mock_request = MagicMock()
-    mock_resp = MagicMock()
-    mock_resp.status_code = 402
-    mock_resp.text = "not-enough-usage-to-run-paid-actor"
-    mock_resp.raise_for_status.side_effect = _httpx.HTTPStatusError(
-        "402", request=mock_request, response=mock_resp
-    )
-
-    with patch("httpx.AsyncClient") as MockClient:
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(return_value=mock_resp)
-        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        comps = await ebay_client.get_sold_comps(keyword="roller blades", limit=20)
-
-    assert comps.total_sold == 0
-    assert comps.scrape_source == "apify"
-    assert comps.scrape_status == "blocked"
-    assert comps.error_reason == "billing_limit"
-    assert any("usage credits" in warning for warning in comps.warnings)
-
-
-# ── Test de integración (requiere APIFY_TOKEN en .env) ──────────────
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_integration_real_apify():
-    """Validar integración real con Apify.
-
-    Ejecutar manualmente: APIFY_TOKEN=... pytest tests/test_ebay_client.py -v -m integration
-    """
-    client = EbayClient()
-    comps = await client.get_sold_comps(keyword="iphone 15 pro", days=30, limit=5)
-    if comps.error_reason in ("billing_limit", "missing_token"):
-        pytest.skip(f"Apify integration unavailable: {comps.error_reason}")
-    assert comps.total_sold > 0
-    assert comps.avg_price > 0
-    for listing in comps.listings:
-        assert listing.price > 0
-        assert listing.sold is True
-        assert listing.title

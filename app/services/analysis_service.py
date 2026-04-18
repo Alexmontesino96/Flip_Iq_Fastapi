@@ -12,6 +12,7 @@ L. AI Explanation → M. Market Intelligence (Premium)
 import asyncio
 import re
 import logging
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -764,12 +765,15 @@ async def run_analysis(
     # -----------------------------------------------------------------------
     ebay_category_id = category_result.ebay_category_id if category_result else None
 
+    _t_total = time.perf_counter()
+
     ebay = _get_ebay_client()
     ebay_limit = 240 if barcode else 50
     logger.info(
         "FETCH START: barcode='%s' keyword='%s' ebay_limit=%d",
         barcode, search_keyword, ebay_limit,
     )
+    _t0 = time.perf_counter()
     ebay_coro = ebay.get_sold_comps(
         barcode=barcode, keyword=search_keyword, days=30, limit=ebay_limit,
         condition=condition, category_id=ebay_category_id,
@@ -828,9 +832,15 @@ async def run_analysis(
             except Exception as e:
                 logger.warning("eBay keyword fallback failed: %s", e)
 
+    logger.info("⏱ FETCH: %.1fs (ebay=%d, amazon=%d)",
+                time.perf_counter() - _t0,
+                len(ebay_raw.listings),
+                len(amazon_raw.listings) if amazon_raw else 0)
+
     # -----------------------------------------------------------------------
     # 2. Enriquecer títulos eBay con LLM (Amazon/Keepa ya tiene datos struct.)
     # -----------------------------------------------------------------------
+    _t0 = time.perf_counter()
     ebay_enriched = False
 
     if ebay_raw.listings and not upc_hit:
@@ -845,9 +855,12 @@ async def run_analysis(
     if amazon_raw and amazon_raw.listings and search_keyword:
         amazon_raw = await filter_comps_by_relevance(amazon_raw, search_keyword)
 
+    logger.info("⏱ ENRICH+RELEVANCE: %.1fs", time.perf_counter() - _t0)
+
     # -----------------------------------------------------------------------
     # 3. Ejecutar pipeline de motores en AMBOS marketplaces
     # -----------------------------------------------------------------------
+    _t0 = time.perf_counter()
     kw = search_keyword or barcode or ""
     pipeline_kwargs = dict(
         keyword=kw,
@@ -962,6 +975,11 @@ async def run_analysis(
             amazon_raw, marketplace_name="amazon_fba", enriched=False, **pipeline_kwargs,
         )
 
+    logger.info("⏱ PIPELINE+REFETCH: %.1fs (ebay=%d, amazon=%d comps)",
+                time.perf_counter() - _t0,
+                ebay_pipeline.cleaned.clean_total,
+                amazon_pipeline.cleaned.clean_total if amazon_pipeline else 0)
+
     # -----------------------------------------------------------------------
     # 4. Seleccionar pipeline primario (el del marketplace solicitado)
     #    Si el marketplace solicitado no tiene datos, fallback al que sí tenga.
@@ -1002,6 +1020,7 @@ async def run_analysis(
     # -----------------------------------------------------------------------
     # 6. Motor L: AI Explanation (con datos de AMBOS marketplaces)
     # -----------------------------------------------------------------------
+    _t0 = time.perf_counter()
     comparison_text = _build_comparison_text(ebay_pipeline, amazon_pipeline)
 
     explanation_coro = generate_explanation(
@@ -1043,6 +1062,8 @@ async def run_analysis(
     else:
         ai_explanation = await explanation_coro
         market_intel = None
+
+    logger.info("⏱ AI+INTELLIGENCE: %.1fs", time.perf_counter() - _t0)
 
     # -----------------------------------------------------------------------
     # 7. Ajustes post-intelligence en el pipeline primario
@@ -1312,6 +1333,8 @@ async def run_analysis(
         primary.cleaned.clean_total,
         primary.cleaned.raw_total,
     )
+
+    logger.info("⏱ TOTAL: %.1fs", time.perf_counter() - _t_total)
 
     return AnalysisResponse(
         id=analysis_id,
