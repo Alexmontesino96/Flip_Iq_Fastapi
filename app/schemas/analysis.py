@@ -246,6 +246,19 @@ class AnalysisSummary(BaseModel):
     warnings: list[str] = []     # alertas del validador
 
 
+class AICompleteEvent(BaseModel):
+    """Chunk 2 de SSE: AI explanation + campos que pueden cambiar post-intelligence."""
+    ai_explanation: str | None = None
+    market_intelligence: MarketIntelligenceOut | None = None
+    # Campos que market_intelligence puede modificar
+    risk_score: int | None = None
+    flip_score: int | None = None
+    recommendation: str | None = None
+    summary: AnalysisSummary | None = None
+    # DB persistence
+    id: int | None = None
+
+
 class AnalysisResponse(BaseModel):
     id: int | None = None
     product: "ProductSummary"

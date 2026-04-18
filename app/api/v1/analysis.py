@@ -1,5 +1,8 @@
+import json
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,7 +12,9 @@ from app.database import get_db
 from app.models.analysis import Analysis
 from app.models.product import Product
 from app.schemas.analysis import AnalysisRequest, AnalysisResponse, AnalysisHistory
-from app.services.analysis_service import run_analysis
+from app.services.analysis_service import run_analysis, run_analysis_progressive
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -62,6 +67,74 @@ async def analyze_product(
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     response.headers["X-RateLimit-Tier"] = gate.tier
     return result
+
+
+@router.post("/stream")
+async def analyze_product_stream(
+    request: Request,
+    payload: AnalysisRequest,
+    db: AsyncSession = Depends(get_db),
+    redis=Depends(get_redis),
+):
+    """SSE endpoint: envía datos en 2 chunks para respuesta progresiva."""
+    gate = await check_analysis_gate(request, redis, db)
+    if not gate.allowed:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "reason": "free_limit_reached",
+                "tier": gate.tier,
+                "remaining": gate.remaining,
+                "reset_in_seconds": gate.reset_in,
+            },
+        )
+
+    await increment_analysis_counter(request, redis, gate)
+
+    async def event_stream():
+        try:
+            async for chunk in run_analysis_progressive(
+                db=db,
+                barcode=payload.barcode,
+                keyword=payload.keyword,
+                cost_price=payload.cost_price,
+                marketplace=payload.marketplace,
+                shipping_cost=payload.shipping_cost,
+                packaging_cost=payload.packaging_cost,
+                prep_cost=payload.prep_cost,
+                promo_cost=payload.promo_cost,
+                return_reserve_pct=payload.return_reserve_pct,
+                target_profit=payload.target_profit,
+                target_roi=payload.target_roi,
+                detailed=payload.detailed,
+                condition=payload.condition,
+                mode=payload.mode,
+                product_type=payload.product_type,
+            ):
+                event = chunk["event"]
+                data = chunk["data"]
+                if hasattr(data, "model_dump_json"):
+                    json_str = data.model_dump_json()
+                else:
+                    json_str = json.dumps(data)
+                yield f"event: {event}\ndata: {json_str}\n\n"
+            yield "event: done\ndata: {}\n\n"
+        except Exception as e:
+            logger.exception("SSE stream error: %s", e)
+            error_data = json.dumps({"error": str(e)})
+            yield f"event: error\ndata: {error_data}\n\n"
+
+    remaining = max(gate.remaining - 1, 0)
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-RateLimit-Remaining": str(remaining),
+            "X-RateLimit-Tier": gate.tier,
+        },
+    )
 
 
 @router.get("/history", response_model=list[AnalysisHistory])
