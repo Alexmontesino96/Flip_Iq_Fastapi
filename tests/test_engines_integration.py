@@ -164,7 +164,7 @@ class TestVelocityEngine:
         cleaned = CleanedComps(sales_per_day=0)
         result = compute_velocity(cleaned)
         assert result.score == 0
-        assert result.category == "slow"
+        assert result.category == "very_slow"
 
     def test_high_velocity(self):
         cleaned = CleanedComps(sales_per_day=2.0, clean_total=60, days_of_data=30)

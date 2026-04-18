@@ -593,6 +593,10 @@ class TestEbayClientFallback:
 
         assert result.total_sold == 1
         assert result.listings[0].title == "iPhone 15 Pro from Apify"
+        assert result.scrape_source == "apify"
+        assert result.scrape_status == "ok"
+        assert result.fallback_used is True
+        assert result.query_used == "iPhone 15 Pro"
 
     @pytest.mark.asyncio
     async def test_apify_mode_skips_scraper(self):
@@ -662,6 +666,55 @@ class TestEbayClientFallback:
         result = await client.get_sold_comps()
         assert result.total_sold == 0
         assert result.listings == []
+        assert result.scrape_status == "empty"
+        assert result.error_reason == "missing_query"
+
+    @pytest.mark.asyncio
+    async def test_scraper_empty_result_has_metadata(self):
+        from app.services.marketplace.ebay import EbayClient
+
+        client = EbayClient()
+        client._data_source = "scraper"
+        client._token = None
+
+        with patch(
+            "app.services.marketplace.ebay.scrape_sold_listings",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            result = await client.get_sold_comps(keyword="missing product")
+
+        assert result.total_sold == 0
+        assert result.scrape_source == "scraper"
+        assert result.scrape_status == "empty"
+        assert result.diagnostics["attempts"][0]["source"] == "scraper"
+        assert result.diagnostics["attempts"][0]["status"] == "empty"
+
+    @pytest.mark.asyncio
+    async def test_scraper_blocked_fallback_metadata(self):
+        from app.services.marketplace.ebay import EbayClient
+        from app.services.marketplace.ebay_scraper import EbayScraperBlocked
+
+        client = EbayClient()
+        client._data_source = "scraper"
+        client._token = "fake-token"
+
+        apify_data = [
+            {"title": "Fallback item", "soldPrice": "50.00", "totalPrice": "50.00"}
+        ]
+
+        with patch(
+            "app.services.marketplace.ebay.scrape_sold_listings",
+            side_effect=EbayScraperBlocked("challenge"),
+        ), patch.object(
+            client, "_fetch_via_apify", new_callable=AsyncMock, return_value=apify_data,
+        ):
+            result = await client.get_sold_comps(keyword="blocked query")
+
+        assert result.scrape_source == "apify"
+        assert result.fallback_used is True
+        assert result.diagnostics["attempts"][0]["status"] == "blocked"
+        assert any("fallback" in warning.lower() for warning in result.warnings)
 
     @pytest.mark.asyncio
     async def test_condition_propagated_to_scraper(self):

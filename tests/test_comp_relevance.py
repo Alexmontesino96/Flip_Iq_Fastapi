@@ -102,6 +102,31 @@ class TestFilterCompsByRelevance:
         assert len(result.listings) == 6
 
     @pytest.mark.asyncio
+    async def test_low_sample_relevant_comps_are_used_with_warning(self):
+        """Si sobreviven 2-4 comps relevantes, se usan aunque la muestra sea baja."""
+        comps = _make_comps([
+            ("Nike Vomero 5 GS Black", 80.0),
+            ("Nike Vomero 5 GS White", 85.0),
+            ("Nike Vomero 5 GS Pink", 90.0),
+            ("Nike Vomero 5 Mens Blue", 160.0),
+            ("Nike Vomero 5 Mens Red", 170.0),
+            ("Nike Vomero 5 Mens Grey", 162.0),
+        ])
+
+        mock_verdicts = [1, 1, 1, 0, 0, 0]
+
+        with patch(
+            "app.services.engines.comp_relevance._call_llm",
+            new_callable=AsyncMock,
+            return_value=mock_verdicts,
+        ):
+            result = await filter_comps_by_relevance(comps, "Nike Vomero 5 GS")
+
+        assert len(result.listings) == 3
+        assert result.diagnostics["relevance_filter"]["low_sample"] is True
+        assert any("highly relevant comps" in warning for warning in result.warnings)
+
+    @pytest.mark.asyncio
     async def test_graceful_degradation_no_llm(self):
         """Sin API key → retorna comps sin cambio."""
         comps = _make_comps([

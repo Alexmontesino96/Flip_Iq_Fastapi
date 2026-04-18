@@ -591,6 +591,31 @@ def test_validate_buy_condition_warning_includes_subset_profit():
     assert "max buy $180.00" in condition_warnings[0]
 
 
+def test_validate_buy_condition_mismatch_caps_buy_small_to_watch():
+    """Pocos comps de la condición pedida no deben permitir buy_small."""
+    confidence = ConfidenceResult(score=60, category="medium", factors={})
+    title_risk = TitleRiskResult(
+        risk_score=0.0, flagged_listings=0, flagged_pct=0.0,
+        semantic_flags={}, manual_review_required=False,
+    )
+    cleaned = CleanedComps(
+        clean_total=8,
+        raw_total=12,
+        requested_condition="new",
+        condition_match_rate=0.25,
+        condition_filtered=0,
+        median_price=180.0,
+        condition_subset_count=2,
+        condition_subset_median=240.0,
+    )
+    profit = compute_profit(180.0, 110.0, "ebay")
+
+    rec, warnings = _validate_buy("buy_small", confidence, title_risk, cleaned, profit)
+
+    assert rec == "watch"
+    assert any("not a reliable primary estimate" in w for w in warnings)
+
+
 # --- P1: Product title condition noise ---
 
 def test_has_condition_noise():

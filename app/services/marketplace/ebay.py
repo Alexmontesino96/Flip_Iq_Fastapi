@@ -123,6 +123,7 @@ class EbayClient(MarketplaceClient):
         self._data_source = settings.ebay_data_source
         self._rpi_api_key = settings.rpi_scraper_api_key
         self._proxy_url = settings.residential_proxy_url or None
+        self._last_fetch_meta: dict[str, object] = {}
 
         # Pool de RPis: parsear URLs separadas por coma
         raw = settings.rpi_scraper_urls.strip()
@@ -165,7 +166,13 @@ class EbayClient(MarketplaceClient):
         """
         query = barcode or keyword
         if not query:
-            return CompsResult(marketplace="ebay")
+            return CompsResult(
+                marketplace="ebay",
+                query_used=None,
+                scrape_source=None,
+                scrape_status="empty",
+                error_reason="missing_query",
+            )
 
         logger.info(
             "eBay get_sold_comps: query='%s' limit=%d data_source='%s' proxy=%s",
@@ -177,24 +184,52 @@ class EbayClient(MarketplaceClient):
         cond = condition if condition and condition != "any" else None
 
         data: list[dict] | None = None
+        source_used: str | None = None
+        status = "empty"
+        fallback_used = False
+        error_reason: str | None = None
+        attempts: list[dict[str, object]] = []
+
+        def _record_attempt(source: str, result: list[dict] | None) -> None:
+            nonlocal source_used, status, error_reason
+            meta = dict(getattr(self, "_last_fetch_meta", {}) or {})
+            if meta.get("source") != source:
+                meta = {"source": source}
+            if "source" not in meta:
+                meta["source"] = source
+            if result is not None and "status" not in meta:
+                meta["status"] = "ok" if result else "empty"
+            attempts.append(meta)
+            if result is not None:
+                source_used = source
+                status = str(meta.get("status") or ("ok" if result else "empty"))
+                error_reason = meta.get("error_reason") if isinstance(meta.get("error_reason"), str) else None
 
         if self._data_source == "rpi":
-            data = await self._fetch_via_rpi(query, limit, category_id=category_id)
+            data = await self._fetch_via_rpi(query, limit, condition=cond, category_id=category_id)
+            _record_attempt("rpi", data)
             if data is None:
                 logger.info("RPi proxy falló, intentando scraper directo para '%s'", query)
+                fallback_used = True
                 data = await self._fetch_via_scraper(query, limit, condition=cond, category_id=category_id)
+                _record_attempt("scraper", data)
             if data is None and self._token:
                 logger.info("Scraper directo falló, intentando Apify para '%s'", query)
-                data = await self._fetch_via_apify(query, limit)
+                fallback_used = True
+                data = await self._fetch_via_apify(query, limit, condition=cond, category_id=category_id)
+                _record_attempt("apify", data)
         elif self._data_source == "scraper":
             data = await self._fetch_via_scraper(query, limit, condition=cond, category_id=category_id)
+            _record_attempt("scraper", data)
             logger.info(
                 "Scraper result: %d items for '%s'",
                 len(data) if data else 0, query,
             )
             if data is None and self._token:
                 logger.info("Scraper falló, intentando fallback a Apify para '%s'", query)
-                data = await self._fetch_via_apify(query, limit)
+                fallback_used = True
+                data = await self._fetch_via_apify(query, limit, condition=cond, category_id=category_id)
+                _record_attempt("apify", data)
                 logger.info(
                     "Apify fallback result: %d items for '%s'",
                     len(data) if data else 0, query,
@@ -202,11 +237,35 @@ class EbayClient(MarketplaceClient):
         else:
             # data_source == "apify"
             logger.info("Usando Apify directo (data_source='apify')")
-            data = await self._fetch_via_apify(query, limit)
+            data = await self._fetch_via_apify(query, limit, condition=cond, category_id=category_id)
+            _record_attempt("apify", data)
 
         if not data:
             logger.warning("eBay: 0 items para '%s' después de todos los intentos", query)
-            return CompsResult(marketplace="ebay", days_of_data=days)
+            if attempts:
+                last = attempts[-1]
+                source = last.get("source")
+                if source_used is None and isinstance(source, str):
+                    source_used = source
+                status = str(last.get("status") or status)
+                reason = last.get("error_reason")
+                error_reason = reason if isinstance(reason, str) else error_reason
+            return CompsResult(
+                marketplace="ebay",
+                days_of_data=days,
+                query_used=query,
+                scrape_source=source_used,
+                scrape_status=status,
+                fallback_used=fallback_used,
+                error_reason=error_reason,
+                diagnostics={
+                    "attempts": attempts,
+                    "raw_count": 0,
+                    "mapped_count": 0,
+                    "requested_condition": condition,
+                    "category_id": category_id,
+                },
+            )
 
         listings = self._map_and_filter(data, min_price, max_price)
         logger.info(
@@ -214,10 +273,36 @@ class EbayClient(MarketplaceClient):
             self._data_source, len(data), len(listings), query,
         )
 
-        return CompsResult.from_listings(listings, marketplace="ebay", days=days)
+        result = CompsResult.from_listings(
+            listings,
+            marketplace="ebay",
+            days=days,
+            query_used=query,
+            scrape_source=source_used,
+            scrape_status=status if listings else "empty",
+            fallback_used=fallback_used,
+            error_reason=error_reason,
+            diagnostics={
+                "attempts": attempts,
+                "raw_count": len(data),
+                "mapped_count": len(listings),
+                "requested_condition": condition,
+                "category_id": category_id,
+            },
+        )
+        if fallback_used:
+            result.warnings.append(
+                "eBay scraper fallback was used; source filters may be less precise."
+            )
+        if source_used == "apify" and (cond or category_id is not None):
+            result.warnings.append(
+                "Apify fallback may not fully preserve eBay condition/category filters."
+            )
+        return result
 
     async def _fetch_via_rpi(
-        self, query: str, limit: int, category_id: int | None = None,
+        self, query: str, limit: int, condition: str | None = None,
+        category_id: int | None = None,
     ) -> list[dict] | None:
         """Obtiene datos via pool de RPi Scraper Proxies (IPs residenciales).
 
@@ -226,6 +311,11 @@ class EbayClient(MarketplaceClient):
         """
         if not self._rpi_urls or not self._rpi_cycle:
             logger.debug("RPI_SCRAPER_URLS no configuradas")
+            self._last_fetch_meta = {
+                "source": "rpi",
+                "status": "empty",
+                "error_reason": "rpi_not_configured",
+            }
             return None
 
         headers = {}
@@ -237,6 +327,8 @@ class EbayClient(MarketplaceClient):
             rpi_url = next(self._rpi_cycle)
             try:
                 body: dict = {"keyword": query, "limit": limit}
+                if condition is not None:
+                    body["condition"] = condition
                 if category_id is not None:
                     body["category_id"] = category_id
                 async with httpx.AsyncClient(timeout=25) as client:
@@ -253,8 +345,18 @@ class EbayClient(MarketplaceClient):
                     continue
                 if not data:
                     logger.warning("RPi %s retornó 0 resultados para '%s'", rpi_url, query)
+                    self._last_fetch_meta = {
+                        "source": "rpi",
+                        "status": "empty",
+                        "error_reason": "empty_response",
+                    }
                     return None  # 0 resultados es válido, no reintentar
                 logger.info("RPi %s: %d resultados para '%s'", rpi_url, len(data), query)
+                self._last_fetch_meta = {
+                    "source": "rpi",
+                    "status": "ok",
+                    "raw_count": len(data),
+                }
                 return data
 
             except httpx.TimeoutException:
@@ -265,6 +367,11 @@ class EbayClient(MarketplaceClient):
                 logger.warning("RPi %s error para '%s': %s, probando siguiente", rpi_url, query, e)
 
         logger.warning("Todos los RPi proxies fallaron para '%s'", query)
+        self._last_fetch_meta = {
+            "source": "rpi",
+            "status": "blocked",
+            "error_reason": "all_rpi_proxies_failed",
+        }
         return None
 
     async def _fetch_via_scraper(
@@ -283,27 +390,61 @@ class EbayClient(MarketplaceClient):
                     condition=condition, category_id=category_id,
                 )
                 if data and (len(data) >= 5 or attempt == 1):
+                    self._last_fetch_meta = {
+                        "source": "scraper",
+                        "status": "ok" if len(data) >= 5 else "partial",
+                        "raw_count": len(data),
+                    }
                     return data
                 if not data:
                     logger.warning("Scraper retornó 0 resultados para '%s'", query)
+                    self._last_fetch_meta = {
+                        "source": "scraper",
+                        "status": "empty",
+                        "error_reason": "empty_response",
+                    }
                     return None
                 logger.info("Scraper retornó solo %d resultados para '%s', reintentando", len(data), query)
             except Exception as e:
                 # curl_cffi exceptions: HTTPError, Timeout, RequestException
                 exc_name = type(e).__name__
+                status = "blocked"
                 if exc_name == "Timeout":
                     logger.warning("Scraper timeout para '%s'", query)
                     if attempt == 0:
                         continue
+                    self._last_fetch_meta = {
+                        "source": "scraper",
+                        "status": status,
+                        "error_reason": "timeout",
+                    }
                     return None
                 logger.warning("Scraper error (%s) para '%s': %s", exc_name, query, e)
+                self._last_fetch_meta = {
+                    "source": "scraper",
+                    "status": status,
+                    "error_reason": exc_name,
+                }
                 return None
+        self._last_fetch_meta = {
+            "source": "scraper",
+            "status": "empty",
+            "error_reason": "unknown",
+        }
         return None
 
-    async def _fetch_via_apify(self, query: str, limit: int) -> list[dict] | None:
+    async def _fetch_via_apify(
+        self, query: str, limit: int, condition: str | None = None,
+        category_id: int | None = None,
+    ) -> list[dict] | None:
         """Obtiene datos via Apify. Retorna None si falla."""
         if not self._token:
             logger.error("APIFY_TOKEN no configurado")
+            self._last_fetch_meta = {
+                "source": "apify",
+                "status": "empty",
+                "error_reason": "missing_token",
+            }
             return None
 
         limit = max(1, limit)
@@ -312,6 +453,10 @@ class EbayClient(MarketplaceClient):
             "maxItems": limit,
             "detailedSearch": False,
         }
+        if condition is not None:
+            actor_input["condition"] = condition
+        if category_id is not None:
+            actor_input["categoryId"] = category_id
 
         try:
             async with httpx.AsyncClient(timeout=APIFY_TIMEOUT) as client:
@@ -324,18 +469,43 @@ class EbayClient(MarketplaceClient):
                 data = resp.json()
         except httpx.TimeoutException:
             logger.error("Apify timeout después de %ds para query='%s'", APIFY_TIMEOUT, query)
+            self._last_fetch_meta = {
+                "source": "apify",
+                "status": "blocked",
+                "error_reason": "timeout",
+            }
             return None
         except httpx.HTTPStatusError as e:
             logger.error("Apify HTTP error %s: %s", e.response.status_code, e.response.text[:200])
+            self._last_fetch_meta = {
+                "source": "apify",
+                "status": "blocked",
+                "error_reason": f"http_{e.response.status_code}",
+            }
             return None
         except Exception as e:
             logger.error("Apify error: %s", e)
+            self._last_fetch_meta = {
+                "source": "apify",
+                "status": "blocked",
+                "error_reason": type(e).__name__,
+            }
             return None
 
         if not isinstance(data, list):
             logger.warning("Apify response no es una lista: %s", type(data))
+            self._last_fetch_meta = {
+                "source": "apify",
+                "status": "blocked",
+                "error_reason": "invalid_response",
+            }
             return None
 
+        self._last_fetch_meta = {
+            "source": "apify",
+            "status": "ok" if data else "empty",
+            "raw_count": len(data),
+        }
         return data
 
     @staticmethod

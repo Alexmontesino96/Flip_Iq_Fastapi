@@ -297,6 +297,30 @@ def clean_comps(
 ) -> CleanedComps:
     """Limpia comps brutos y retorna CleanedComps con estadísticas recalculadas."""
     no_match_rate = 0.0 if condition != "any" else 1.0
+    data_quality_warnings = list(raw.warnings)
+
+    def _filter_counts(
+        raw_count: int,
+        temporal_count: int = 0,
+        priced_count: int = 0,
+        product_type_removed: int = 0,
+        outlier_removed: int = 0,
+        danger_removed: int = 0,
+        condition_removed: int = 0,
+        relevance_removed: int = 0,
+        clean_count: int = 0,
+    ) -> dict[str, int]:
+        return {
+            "raw": raw_count,
+            "temporal": temporal_count,
+            "priced": priced_count,
+            "product_type_filtered": product_type_removed,
+            "outliers_removed": outlier_removed,
+            "danger_filtered": danger_removed,
+            "condition_filtered": condition_removed,
+            "relevance_filtered": relevance_removed,
+            "clean": clean_count,
+        }
 
     if not raw.listings:
         return CleanedComps(
@@ -305,6 +329,9 @@ def clean_comps(
             days_of_data=raw.days_of_data,
             requested_condition=condition,
             condition_match_rate=no_match_rate,
+            pricing_basis="no_data",
+            data_quality_warnings=data_quality_warnings,
+            filter_counts=_filter_counts(0),
         )
 
     raw_total = len(raw.listings)
@@ -331,6 +358,9 @@ def clean_comps(
             days_of_data=raw.days_of_data,
             requested_condition=condition,
             condition_match_rate=no_match_rate,
+            pricing_basis="no_data",
+            data_quality_warnings=data_quality_warnings,
+            filter_counts=_filter_counts(raw_total, temporal_count=0),
         )
 
     # 1. Normalizar precios
@@ -347,6 +377,13 @@ def clean_comps(
             days_of_data=raw.days_of_data,
             requested_condition=condition,
             condition_match_rate=no_match_rate,
+            pricing_basis="no_data",
+            data_quality_warnings=data_quality_warnings,
+            filter_counts=_filter_counts(
+                raw_total,
+                temporal_count=len(temporal_filtered),
+                priced_count=0,
+            ),
         )
 
     # 2. Filtrar por product_type ANTES de IQR (si se proporcionó).
@@ -399,6 +436,7 @@ def clean_comps(
 
     condition_subset_count = 0
     condition_subset_median: float | None = None
+    pricing_basis = "all_conditions"
 
     if condition != "any":
         matched = [
@@ -409,10 +447,12 @@ def clean_comps(
         # Solo aplicar filtro si quedan suficientes comps
         if len(matched) >= 3:
             after_outliers = matched
+            pricing_basis = "requested_condition"
         else:
             # No hay suficientes comps con esa condición,
             # mantener todos pero calcular stats del subset para informar al usuario
             condition_subset_count = len(matched)
+            pricing_basis = "mixed_conditions"
             if matched:
                 subset_prices = sorted(l.total_price for l in matched)
                 n_sub = len(subset_prices)
@@ -422,6 +462,10 @@ def clean_comps(
                     else (subset_prices[n_sub // 2 - 1] + subset_prices[n_sub // 2]) / 2
                 )
                 condition_subset_median = round(condition_subset_median, 2)
+            data_quality_warnings.append(
+                f"Only {len(matched)} comps matched requested condition '{condition}'; "
+                "pricing is based on mixed-condition comps."
+            )
             condition_filtered = 0
     else:
         # Auto-filtro: si la mayoría son "new", excluir "used"/"for_parts"
@@ -437,6 +481,7 @@ def clean_comps(
             if len(filtered) >= 5:
                 condition_filtered = len(after_outliers) - len(filtered)
                 after_outliers = filtered
+                pricing_basis = "auto_condition_filtered"
 
     # 4. Filtrar por relevancia si hay datos enriquecidos (LLM o detailedSearch)
     relevance_filtered = 0
@@ -448,9 +493,14 @@ def clean_comps(
             if score >= 0.75:
                 relevant.append(l)
         relevance_filtered = len(after_outliers) - len(relevant)
-        # Solo aplicar filtro si quedan suficientes comps
-        if len(relevant) >= 3:
+        # Preferir pocos comps relevantes sobre muchos comps contaminados.
+        if len(relevant) >= 2:
             after_outliers = relevant
+            if len(relevant) < 5:
+                data_quality_warnings.append(
+                    f"Only {len(relevant)} enriched relevant comps remained; "
+                    "pricing confidence is limited."
+                )
         else:
             relevance_filtered = 0  # No filtrar si quedarían muy pocos
 
@@ -468,6 +518,19 @@ def clean_comps(
             condition_match_rate=no_match_rate,
             danger_filtered=danger_filtered,
             product_type_filtered=product_type_filtered,
+            pricing_basis="no_data",
+            data_quality_warnings=data_quality_warnings,
+            filter_counts=_filter_counts(
+                raw_total,
+                temporal_count=len(temporal_filtered),
+                priced_count=len(priced),
+                product_type_removed=product_type_filtered,
+                outlier_removed=outliers_removed,
+                danger_removed=danger_filtered,
+                condition_removed=condition_filtered,
+                relevance_removed=relevance_filtered,
+                clean_count=0,
+            ),
         )
 
     # 5. Recalcular estadísticas
@@ -514,4 +577,17 @@ def clean_comps(
         product_type_filtered=product_type_filtered,
         condition_subset_count=condition_subset_count,
         condition_subset_median=condition_subset_median,
+        pricing_basis=pricing_basis,
+        data_quality_warnings=data_quality_warnings,
+        filter_counts=_filter_counts(
+            raw_total,
+            temporal_count=len(temporal_filtered),
+            priced_count=len(priced),
+            product_type_removed=product_type_filtered,
+            outlier_removed=outliers_removed,
+            danger_removed=danger_filtered,
+            condition_removed=condition_filtered,
+            relevance_removed=relevance_filtered,
+            clean_count=len(clean),
+        ),
     )

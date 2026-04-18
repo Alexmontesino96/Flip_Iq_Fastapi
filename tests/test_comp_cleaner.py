@@ -210,6 +210,8 @@ class TestConditionFiltering:
         # Solo 1 New, no suficiente para filtrar → mantiene todos
         assert result.condition_filtered == 0
         assert result.clean_total == 5
+        assert result.pricing_basis == "mixed_conditions"
+        assert any("mixed-condition comps" in w for w in result.data_quality_warnings)
 
     def test_condition_counts_populated(self):
         raw = self._make_comps_with_conditions(
@@ -311,6 +313,9 @@ class TestTemporalFiltering:
         raw = CompsResult(listings=listings, days_of_data=30, total_sold=5)
         result = clean_comps(raw)
         assert result.clean_total == 3
+        assert result.filter_counts["raw"] == 5
+        assert result.filter_counts["temporal"] == 3
+        assert result.filter_counts["clean"] == 3
 
     def test_keeps_listings_without_ended_at(self):
         """Listings sin ended_at no se penalizan."""

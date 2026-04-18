@@ -14,7 +14,7 @@ from app.services.marketplace.base import CleanedComps
 class VelocityResult:
     score: int
     sales_per_day: float
-    category: str  # very_fast|healthy|moderate|slow
+    category: str  # very_fast|healthy|moderate|slow|very_slow
     market_sale_interval_days: float | None  # intervalo entre ventas en el mercado
     estimated_days_to_sell: str | None        # "~2d", "~7-30d", etc.
 

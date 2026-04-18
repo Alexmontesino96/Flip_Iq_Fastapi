@@ -75,11 +75,25 @@ class CompsResult:
     sales_by_date: list[SalesByDate] = field(default_factory=list)
     # Enrichment
     image_url: str | None = None
+    # Data quality / scraper diagnostics (optional, does not affect core stats)
+    query_used: str | None = None
+    scrape_source: str | None = None
+    scrape_status: str = "unknown"
+    fallback_used: bool = False
+    error_reason: str | None = None
+    diagnostics: dict[str, object] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_listings(cls, listings: list[MarketplaceListing], marketplace: str = "", days: int = 30) -> "CompsResult":
+    def from_listings(
+        cls,
+        listings: list[MarketplaceListing],
+        marketplace: str = "",
+        days: int = 30,
+        **metadata,
+    ) -> "CompsResult":
         if not listings:
-            return cls(marketplace=marketplace, days_of_data=days)
+            return cls(marketplace=marketplace, days_of_data=days, **metadata)
 
         prices = sorted(l.total_price or l.price for l in listings)
         n = len(prices)
@@ -116,6 +130,7 @@ class CompsResult:
             days_of_data=days_actual,
             sales_per_day=round(n / max(days_actual, 1), 2),
             marketplace=marketplace,
+            **metadata,
         )
 
         result.price_buckets = build_price_buckets(prices)
@@ -203,6 +218,9 @@ class CleanedComps:
     # Condition subset stats (cuando safety net impide filtrar)
     condition_subset_count: int = 0
     condition_subset_median: float | None = None
+    pricing_basis: str = "no_data"
+    data_quality_warnings: list[str] = field(default_factory=list)
+    filter_counts: dict[str, int] = field(default_factory=dict)
 
 
 class MarketplaceClient(ABC):

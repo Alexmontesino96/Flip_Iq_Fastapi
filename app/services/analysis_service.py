@@ -329,6 +329,9 @@ def _run_pipeline(
     else:
         opportunity = 0
 
+    if cleaned.pricing_basis == "mixed_conditions":
+        opportunity = min(opportunity, 44)
+
     # Distribución de precios
     clean_prices = sorted(l.total_price for l in cleaned.listings if l.total_price)
     distribution_shape = _detect_distribution_shape(clean_prices) if cleaned.clean_total > 0 else "unknown"
@@ -341,6 +344,22 @@ def _run_pipeline(
         distribution_shape=distribution_shape,
         condition_subset_pricing=condition_subset_pricing,
     )
+
+    for warning in cleaned.data_quality_warnings:
+        if warning not in warnings:
+            warnings.append(warning)
+
+    if raw_comps.fallback_used:
+        warnings.append("Marketplace fallback data source was used; verify comps manually.")
+    if raw_comps.scrape_status in ("blocked", "partial"):
+        warnings.append(
+            f"Marketplace data source returned status '{raw_comps.scrape_status}'. "
+            "Pricing confidence is limited."
+        )
+    if marketplace_name == "amazon_fba" and cleaned.clean_total > 0:
+        warnings.append(
+            "Amazon FBA fees use a generic estimate; confirm category and fulfillment costs before buying."
+        )
 
     # Warning: mercado dominado por un seller
     if competition.dominant_seller_share > 0.40:
@@ -567,7 +586,8 @@ def _validate_buy(
                     f"match '{cleaned.requested_condition}' condition "
                     f"(subset median ${cleaned.condition_subset_median:.2f}). "
                     f"Prices shown are based on all {cleaned.clean_total} comps "
-                    f"(median ${cleaned.median_price:.2f})."
+                    f"(median ${cleaned.median_price:.2f}) and are not a reliable "
+                    "primary estimate for the requested condition."
                 )
                 if condition_subset_pricing:
                     base_msg += (
@@ -581,9 +601,9 @@ def _validate_buy(
                 warnings.append(
                     f"No comps found in '{cleaned.requested_condition}' condition. "
                     f"Prices shown are based on all {cleaned.clean_total} comps (all conditions). "
-                    f"Cannot estimate '{cleaned.requested_condition}' market value."
+                    f"Cannot estimate '{cleaned.requested_condition}' market value reliably."
                 )
-            if recommendation == "buy":
+            if recommendation in ("buy", "buy_small"):
                 recommendation = "watch"
         elif cleaned.condition_match_rate < 0.7:
             warnings.append(
@@ -736,7 +756,15 @@ async def run_analysis(
             product_type=product_type,
         )
         results = await asyncio.gather(ebay_coro, amazon_coro, return_exceptions=True)
-        ebay_raw = results[0] if not isinstance(results[0], Exception) else CompsResult(listings=[], total_sold=0, median_price=0.0, source="ebay_sold")
+        ebay_raw = results[0] if not isinstance(results[0], Exception) else CompsResult(
+            listings=[],
+            total_sold=0,
+            median_price=0.0,
+            marketplace="ebay",
+            scrape_source="ebay",
+            scrape_status="blocked",
+            error_reason=type(results[0]).__name__,
+        )
         if isinstance(results[0], Exception):
             logger.warning("eBay fetch failed, continuing with empty comps: %s", results[0])
         if isinstance(results[1], Exception):
@@ -1100,6 +1128,19 @@ async def run_analysis(
             "outliers_removed": primary.cleaned.outliers_removed,
             "relevance_filtered": primary.cleaned.relevance_filtered,
             "cv": primary.cleaned.cv,
+        },
+        "data_quality": {
+            "pricing_basis": primary.cleaned.pricing_basis,
+            "warnings": primary.cleaned.data_quality_warnings,
+            "filter_counts": primary.cleaned.filter_counts,
+            "scraper": {
+                "source": primary.raw_comps.scrape_source,
+                "status": primary.raw_comps.scrape_status,
+                "fallback_used": primary.raw_comps.fallback_used,
+                "query_used": primary.raw_comps.query_used,
+                "error_reason": primary.raw_comps.error_reason,
+                "diagnostics": primary.raw_comps.diagnostics,
+            },
         },
     }
 

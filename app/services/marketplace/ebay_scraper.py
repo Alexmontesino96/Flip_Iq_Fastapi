@@ -32,6 +32,22 @@ USER_AGENTS = [
 
 SCRAPER_TIMEOUT = 20  # segundos
 
+
+class EbayScraperBlocked(RuntimeError):
+    """Raised when eBay serves a challenge page instead of search results."""
+
+
+def _looks_like_challenge(html: str) -> bool:
+    lower = html[:5000].lower()
+    markers = (
+        "captcha",
+        "verify you are a human",
+        "security challenge",
+        "access denied",
+        "pardon our interruption",
+    )
+    return any(marker in lower for marker in markers)
+
 _DEFAULT_EXCLUSIONS = [
     "lot", "bundle", "wholesale", "bulk",
     "broken", "defective", "junk", "salvage",
@@ -465,10 +481,10 @@ async def scrape_sold_listings(
             )
             resp.raise_for_status()
 
-            # Detectar CAPTCHA/challenge redirect
-            if "challenge" in str(resp.url):
+            # Detectar CAPTCHA/challenge redirect/body
+            if "challenge" in str(resp.url).lower() or _looks_like_challenge(resp.text):
                 logger.warning("eBay CAPTCHA detectado para '%s'", keyword)
-                break
+                raise EbayScraperBlocked(f"eBay challenge detected for '{keyword}'")
 
             page_results = parse_sold_listings(resp.text)
             if not page_results:

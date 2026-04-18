@@ -30,8 +30,10 @@ Rules:
 
 Return ONLY a JSON array of 1s and 0s. Example: [1,0,1,0]"""
 
-# Minimum comps to keep after filtering; below this we skip the filter
+# Preferred sample size after filtering. Smaller 2-4 samples are still better
+# than keeping obvious mismatches, but they should lower confidence downstream.
 _MIN_COMPS_AFTER_FILTER = 5
+_MIN_LOW_SAMPLE_AFTER_FILTER = 2
 
 
 async def filter_comps_by_relevance(
@@ -43,7 +45,8 @@ async def filter_comps_by_relevance(
     Safety nets:
     - Si no hay LLM disponible, retorna sin filtrar.
     - Si el LLM falla, retorna sin filtrar.
-    - Si quedan < _MIN_COMPS_AFTER_FILTER después del filtro, no filtra.
+    - Si quedan 2-4 comps, filtra pero marca baja muestra.
+    - Si quedan < 2 comps después del filtro, no filtra.
     - Si el array de respuesta no tiene el tamaño correcto, no filtra.
     """
     if not comps.listings or not keyword:
@@ -79,23 +82,44 @@ async def filter_comps_by_relevance(
         if verdict == 1
     ]
     removed = len(comps.listings) - len(filtered)
+    original_count = len(comps.listings)
 
-    # Safety net: don't filter if too few remain
-    if len(filtered) < _MIN_COMPS_AFTER_FILTER:
+    comps.diagnostics["relevance_filter"] = {
+        "original_count": original_count,
+        "matched_count": len(filtered),
+        "removed_count": removed,
+        "min_preferred": _MIN_COMPS_AFTER_FILTER,
+    }
+
+    # Safety net: one match is too thin to price from, so keep all with metadata.
+    if len(filtered) < _MIN_LOW_SAMPLE_AFTER_FILTER:
         logger.info(
             "Relevance filter: only %d/%d would survive, keeping all",
-            len(filtered), len(comps.listings),
+            len(filtered), original_count,
         )
+        comps.diagnostics["relevance_filter"]["applied"] = False
+        comps.diagnostics["relevance_filter"]["reason"] = "too_few_matches"
         return comps
 
     if removed > 0:
         logger.info(
             "Relevance filter: removed %d/%d comps for '%s'",
-            removed, len(comps.listings), keyword,
+            removed, original_count, keyword,
         )
         # Rebuild CompsResult with filtered listings
         comps.listings = filtered
         comps.total_sold = len(filtered)
+        comps.diagnostics["relevance_filter"]["applied"] = True
+        if len(filtered) < _MIN_COMPS_AFTER_FILTER:
+            warning = (
+                f"Only {len(filtered)} highly relevant comps remained after filtering; "
+                "pricing confidence is limited."
+            )
+            comps.warnings.append(warning)
+            comps.diagnostics["relevance_filter"]["low_sample"] = True
+    else:
+        comps.diagnostics["relevance_filter"]["applied"] = False
+        comps.diagnostics["relevance_filter"]["reason"] = "all_matched"
 
     return comps
 
