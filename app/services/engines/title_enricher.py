@@ -18,10 +18,10 @@ from app.services.marketplace.base import CompsResult
 
 logger = logging.getLogger(__name__)
 
-# Batches de 10 títulos: Gemini 2.5 Flash thinking tokens necesitan margen.
-_LLM_BATCH_SIZE = 10
-# Concurrencia: 3 batches simultáneos (Flash-Lite tiene límites más altos)
-_LLM_CONCURRENCY = 3
+# Batches de 60 títulos: son títulos cortos (~10-15 palabras), Gemini Flash los maneja sin problema.
+_LLM_BATCH_SIZE = 60
+# Concurrencia: 4 batches simultáneos
+_LLM_CONCURRENCY = 4
 
 # Condiciones detectables por regex en títulos eBay
 _NEW_PATTERNS = re.compile(
