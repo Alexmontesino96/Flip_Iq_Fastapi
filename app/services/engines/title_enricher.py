@@ -232,7 +232,7 @@ async def _llm_extract(
     """
     from app.core.llm import disable_gemini, get_llm_client, is_gemini_error
 
-    client, model = get_llm_client()
+    client, model = get_llm_client(fast=True)
     if client is None:
         return _regex_fallback(titles)
 
@@ -252,7 +252,7 @@ async def _llm_extract(
                 # Si es error de Gemini, desactivar y reintentar con OpenAI
                 if is_gemini_error(e):
                     disable_gemini(str(e)[:100])
-                    fallback_client, fallback_model = get_llm_client()
+                    fallback_client, fallback_model = get_llm_client(fast=True)
                     if fallback_client is not None:
                         try:
                             return await _llm_extract_batch(

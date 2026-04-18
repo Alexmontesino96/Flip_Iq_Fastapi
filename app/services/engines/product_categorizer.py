@@ -71,7 +71,7 @@ async def categorize_product(keyword: str) -> CategoryResult | None:
 
     Returns None si no hay LLM configurado o si falla.
     """
-    client, model = get_llm_client()
+    client, model = get_llm_client(fast=True)
     if client is None:
         return None
 
@@ -119,7 +119,7 @@ async def categorize_product(keyword: str) -> CategoryResult | None:
         except Exception as e:
             if is_gemini_error(e) and attempt == 0:
                 disable_gemini(f"categorizer: {e}")
-                client, model = get_llm_client()
+                client, model = get_llm_client(fast=True)
                 if client is None:
                     return None
                 continue

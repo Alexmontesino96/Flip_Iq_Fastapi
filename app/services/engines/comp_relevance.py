@@ -134,7 +134,7 @@ async def _call_llm(
     """
     from app.core.llm import disable_gemini, get_llm_client, is_gemini_error
 
-    client, model = get_llm_client()
+    client, model = get_llm_client(fast=True)
     if client is None:
         return None
 
@@ -156,7 +156,7 @@ async def _call_llm(
         if is_gemini_error(e):
             disable_gemini(str(e)[:100])
             # Retry with fallback
-            client, model = get_llm_client()
+            client, model = get_llm_client(fast=True)
             if client is None:
                 return None
             try:

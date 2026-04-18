@@ -17,24 +17,31 @@ logger = logging.getLogger(__name__)
 
 _GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 _GEMINI_MODEL = "gemini-2.5-flash"
+_GEMINI_MODEL_FAST = "gemini-2.0-flash"
 _OPENAI_MODEL = "gpt-4o-mini"
 
 # Flag por proceso: si Gemini falla, desactivar para evitar más errores
 _gemini_disabled = False
 
 
-def get_llm_client() -> tuple[openai.AsyncOpenAI, str] | tuple[None, None]:
+def get_llm_client(fast: bool = False) -> tuple[openai.AsyncOpenAI, str] | tuple[None, None]:
     """Retorna (client, model_name) para el proveedor LLM disponible.
+
+    Args:
+        fast: Si True, usa gemini-2.0-flash (sin thinking) para tareas simples
+              como title enrichment. Si False, usa gemini-2.5-flash (con thinking)
+              para tareas complejas como AI explanation.
 
     Prioridad: Gemini > OpenAI. Retorna (None, None) si no hay API key.
     Si Gemini fue deshabilitado por errores, usa OpenAI directamente.
     """
     if settings.gemini_api_key and not _gemini_disabled:
+        model = _GEMINI_MODEL_FAST if fast else _GEMINI_MODEL
         return openai.AsyncOpenAI(
             api_key=settings.gemini_api_key,
             base_url=_GEMINI_BASE_URL,
             max_retries=0,
-        ), _GEMINI_MODEL
+        ), model
 
     if settings.openai_api_key:
         return openai.AsyncOpenAI(
