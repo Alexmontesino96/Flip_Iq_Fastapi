@@ -76,7 +76,7 @@ async def analyze_product_stream(
     db: AsyncSession = Depends(get_db),
     redis=Depends(get_redis),
 ):
-    """SSE endpoint: envía datos en 2 chunks para respuesta progresiva.
+    """SSE endpoint: envía progreso + 2 chunks para respuesta progresiva.
 
     NOTA: La sesión DB del generador se crea dentro del stream (no usa la
     inyectada por Depends) porque FastAPI cierra las dependencias cuando el

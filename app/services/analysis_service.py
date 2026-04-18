@@ -706,13 +706,43 @@ async def run_analysis_progressive(
     mode: str = "standard",
     product_type: str | None = None,
 ) -> AsyncGenerator[dict, None]:
-    """Genera datos de análisis en 2 fases para SSE progresivo.
+    """Genera datos de análisis con progreso SSE y 2 chunks de resultado.
 
+    Eventos opcionales ("progress"): estados de avance para la UI.
     Yield 1 ("analysis"): AnalysisResponse completo sin AI explanation.
     Yield 2 ("ai_complete"): AICompleteEvent con AI + campos que pueden cambiar.
     """
     from app.core.llm import reset_gemini
     reset_gemini()
+
+    _t_total = time.perf_counter()
+
+    def _progress(
+        stage: str,
+        status: str,
+        message: str,
+        progress: int,
+        details: dict | None = None,
+    ) -> dict:
+        return {
+            "event": "progress",
+            "data": {
+                "stage": stage,
+                "status": status,
+                "message": message,
+                "progress": max(0, min(100, progress)),
+                "elapsed_ms": int((time.perf_counter() - _t_total) * 1000),
+                "details": details or {},
+            },
+        }
+
+    yield _progress(
+        "start",
+        "active",
+        "Starting live market scan",
+        3,
+        {"barcode": barcode, "keyword": keyword, "condition": condition},
+    )
 
     # 0. Normalizar barcode: strip leading zeros → formato UPC-12 / EAN-13 estándar
     if barcode:
@@ -729,11 +759,29 @@ async def run_analysis_progressive(
     # 0b. Si solo hay barcode, intentar UPC lookup para obtener keyword
     upc_info: dict | None = None
     if barcode and not keyword:
+        yield _progress(
+            "identify",
+            "active",
+            "Looking up barcode title",
+            8,
+            {"barcode": barcode},
+        )
         upc_info = await lookup_upc(barcode)
         if upc_info and upc_info.get("title"):
             raw_title = upc_info["title"]
             keyword = _simplify_upc_title(raw_title)
             logger.info("UPC lookup: %s → '%s' (raw: '%s')", barcode, keyword, raw_title)
+        yield _progress(
+            "identify",
+            "complete",
+            "Product identity resolved" if keyword else "Barcode lookup finished",
+            12,
+            {
+                "barcode": barcode,
+                "keyword": keyword,
+                "title_found": bool(upc_info and upc_info.get("title")),
+            },
+        )
 
     # 0b. Limpiar keyword: quitar frases de condición que contaminan la búsqueda
     # ("Lightly Used", "Brand New", etc.) — el filtro de condición se aplica en comp_cleaner
@@ -758,6 +806,13 @@ async def run_analysis_progressive(
         # Override manual del usuario — usar directo
         logger.info("product_type manual: '%s'", product_type)
     elif search_keyword:
+        yield _progress(
+            "category",
+            "active",
+            "Classifying product type",
+            14,
+            {"keyword": search_keyword},
+        )
         category_result = await categorize_product(search_keyword)
         if category_result:
             product_type = category_result.product_type
@@ -765,19 +820,40 @@ async def run_analysis_progressive(
                 "Categorizado: '%s' → product_type='%s' (confidence=%.2f)",
                 search_keyword, product_type, category_result.confidence,
             )
+        yield _progress(
+            "category",
+            "complete",
+            "Product type classified" if product_type else "Category check finished",
+            18,
+            {
+                "keyword": search_keyword,
+                "product_type": product_type,
+                "confidence": category_result.confidence if category_result else None,
+            },
+        )
 
     # -----------------------------------------------------------------------
     # 1. Fetch de comps: eBay + Amazon en PARALELO
     # -----------------------------------------------------------------------
     ebay_category_id = category_result.ebay_category_id if category_result else None
 
-    _t_total = time.perf_counter()
-
     ebay = _get_ebay_client()
     ebay_limit = 240 if barcode else 50
     logger.info(
         "FETCH START: barcode='%s' keyword='%s' ebay_limit=%d",
         barcode, search_keyword, ebay_limit,
+    )
+    yield _progress(
+        "fetch",
+        "active",
+        "Pulling live eBay and Amazon market data",
+        25,
+        {
+            "barcode": barcode,
+            "keyword": search_keyword,
+            "ebay_limit": ebay_limit,
+            "amazon_enabled": bool(settings.keepa_api_key),
+        },
     )
     _t0 = time.perf_counter()
     ebay_coro = ebay.get_sold_comps(
@@ -827,6 +903,13 @@ async def run_analysis_progressive(
         if fallback_kw and fallback_kw != barcode:
             logger.info("eBay barcode sin resultados, fallback keyword='%s'", fallback_kw)
             used_keyword_fallback = True
+            yield _progress(
+                "fetch",
+                "active",
+                "UPC search had no eBay matches; trying the product title",
+                36,
+                {"barcode": barcode, "fallback_keyword": fallback_kw},
+            )
             try:
                 ebay_raw = await ebay.get_sold_comps(
                     keyword=fallback_kw, days=30, limit=ebay_limit,
@@ -842,6 +925,20 @@ async def run_analysis_progressive(
                 time.perf_counter() - _t0,
                 len(ebay_raw.listings),
                 len(amazon_raw.listings) if amazon_raw else 0)
+    yield _progress(
+        "fetch",
+        "complete",
+        "Marketplace data collected",
+        46,
+        {
+            "ebay_raw_count": len(ebay_raw.listings),
+            "amazon_raw_count": len(amazon_raw.listings) if amazon_raw else 0,
+            "ebay_source": ebay_raw.scrape_source,
+            "ebay_status": ebay_raw.scrape_status,
+            "fallback_used": ebay_raw.fallback_used or used_keyword_fallback,
+            "query_used": ebay_raw.query_used,
+        },
+    )
 
     # -----------------------------------------------------------------------
     # 2. Enriquecer títulos eBay con LLM (Amazon/Keepa ya tiene datos struct.)
@@ -849,9 +946,27 @@ async def run_analysis_progressive(
     _t0 = time.perf_counter()
     ebay_enriched = False
 
+    yield _progress(
+        "matching",
+        "active",
+        "Reading listings and matching relevant comps",
+        52,
+        {
+            "ebay_raw_count": len(ebay_raw.listings),
+            "amazon_raw_count": len(amazon_raw.listings) if amazon_raw else 0,
+            "keyword": search_keyword,
+        },
+    )
     if ebay_raw.listings and not upc_hit:
         ebay_raw = await enrich_listings(ebay_raw, keyword=search_keyword or barcode)
         ebay_enriched = True
+        yield _progress(
+            "matching",
+            "active",
+            "Listing titles enriched",
+            58,
+            {"ebay_count": len(ebay_raw.listings)},
+        )
 
     # -----------------------------------------------------------------------
     # 2b. LLM relevance filter (después de enrich, antes de pipeline)
@@ -862,11 +977,28 @@ async def run_analysis_progressive(
         amazon_raw = await filter_comps_by_relevance(amazon_raw, search_keyword)
 
     logger.info("⏱ ENRICH+RELEVANCE: %.1fs", time.perf_counter() - _t0)
+    yield _progress(
+        "matching",
+        "complete",
+        "Relevant comps selected",
+        68,
+        {
+            "ebay_count": len(ebay_raw.listings),
+            "amazon_count": len(amazon_raw.listings) if amazon_raw else 0,
+        },
+    )
 
     # -----------------------------------------------------------------------
     # 3. Ejecutar pipeline de motores en AMBOS marketplaces
     # -----------------------------------------------------------------------
     _t0 = time.perf_counter()
+    yield _progress(
+        "scoring",
+        "active",
+        "Calculating profit, velocity, risk, and confidence",
+        72,
+        {"condition": condition, "cost_price": cost_price},
+    )
     kw = search_keyword or barcode or ""
     pipeline_kwargs = dict(
         keyword=kw,
@@ -901,6 +1033,13 @@ async def run_analysis_progressive(
         logger.info(
             "eBay UPC raw comps unusable after cleanup, fallback keyword='%s'",
             search_keyword,
+        )
+        yield _progress(
+            "scoring",
+            "active",
+            "UPC comps were not reliable; checking title-based comps",
+            76,
+            {"barcode": barcode, "fallback_keyword": search_keyword},
         )
         try:
             ebay_raw_kw = await ebay.get_sold_comps(
@@ -945,6 +1084,16 @@ async def run_analysis_progressive(
             "Solo %d comps limpios eBay (<%d), re-fetching con limit=%d",
             ebay_pipeline.cleaned.clean_total, _MIN_CLEAN_COMPS, refetch_limit,
         )
+        yield _progress(
+            "scoring",
+            "active",
+            "Small comp sample; pulling a wider eBay sample",
+            78,
+            {
+                "clean_count": ebay_pipeline.cleaned.clean_total,
+                "refetch_limit": refetch_limit,
+            },
+        )
         try:
             refetch_barcode = barcode if upc_hit else None
             ebay_raw2 = await ebay.get_sold_comps(
@@ -985,6 +1134,16 @@ async def run_analysis_progressive(
                 time.perf_counter() - _t0,
                 ebay_pipeline.cleaned.clean_total,
                 amazon_pipeline.cleaned.clean_total if amazon_pipeline else 0)
+    yield _progress(
+        "scoring",
+        "complete",
+        "Deal model ready",
+        82,
+        {
+            "ebay_clean_count": ebay_pipeline.cleaned.clean_total,
+            "amazon_clean_count": amazon_pipeline.cleaned.clean_total if amazon_pipeline else 0,
+        },
+    )
 
     # -----------------------------------------------------------------------
     # 4. Seleccionar pipeline primario (el del marketplace solicitado)
@@ -1190,6 +1349,17 @@ async def run_analysis_progressive(
     # -----------------------------------------------------------------------
     # YIELD 1: Respuesta parcial (sin AI explanation)
     # -----------------------------------------------------------------------
+    yield _progress(
+        "analysis",
+        "complete",
+        "Decision ready",
+        88,
+        {
+            "best_marketplace": best_marketplace,
+            "recommendation": primary.recommendation,
+            "opportunity": primary.opportunity if has_valid_comps else None,
+        },
+    )
     partial_response = AnalysisResponse(
         id=None,
         product=product_summary,
@@ -1220,6 +1390,13 @@ async def run_analysis_progressive(
     # -----------------------------------------------------------------------
     # 7. Await AI + Intelligence
     # -----------------------------------------------------------------------
+    yield _progress(
+        "ai",
+        "active",
+        "Writing the AI brief",
+        92,
+        {"mode": mode, "has_market_intelligence": bool(intel_task)},
+    )
     _t0 = time.perf_counter()
     try:
         ai_explanation = await explanation_task
@@ -1410,6 +1587,13 @@ async def run_analysis_progressive(
     # -----------------------------------------------------------------------
     # YIELD 2: AI complete + campos finales
     # -----------------------------------------------------------------------
+    yield _progress(
+        "ai",
+        "complete",
+        "AI brief ready",
+        100,
+        {"analysis_id": analysis_id},
+    )
     yield {"event": "ai_complete", "data": AICompleteEvent(
         ai_explanation=ai_explanation if has_valid_comps else None,
         market_intelligence=market_intel_out,
