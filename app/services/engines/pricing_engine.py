@@ -35,11 +35,13 @@ def compute_pricing(cleaned: CleanedComps) -> PricingResult:
     iqr = cleaned.iqr
     cv = cleaned.cv
 
-    # Cuando IQR ≈ 0 (todos los comps al mismo precio), usar 7.5% de la
-    # mediana como spread mínimo para que quick/stretch no colapsen.
-    min_spread = median * 0.075
+    # Cuando el rango natural es demasiado estrecho, usar 10% de la mediana
+    # para que quick/stretch sean decisiones reales y no solo centavos alrededor
+    # del mercado observado.
+    min_spread = median * 0.10
     spread = 0.30 * iqr
-    use_min_spread = spread < median * 0.01
+    natural_range_pct = (p75 - p25) / median if median > 0 else 0.0
+    use_min_spread = natural_range_pct < 0.10
 
     if use_min_spread:
         spread = min_spread

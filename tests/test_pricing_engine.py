@@ -79,6 +79,16 @@ class TestPricingEngine:
         # quick and stretch should differ from market
         assert result.quick_list < result.market_list
         assert result.stretch_list > result.market_list
-        # spread ≈ 7.5% of median
-        assert result.quick_list == round(105.20 - 105.20 * 0.075, 2)
-        assert result.stretch_list == round(105.20 + 105.20 * 0.075, 2)
+        # spread = 10% of median
+        assert result.quick_list == round(105.20 - 105.20 * 0.10, 2)
+        assert result.stretch_list == round(105.20 + 105.20 * 0.10, 2)
+
+    def test_narrow_market_range_expands_strategy_to_ten_percent(self):
+        """When observed spread is <10%, quick/stretch should still be useful."""
+        cleaned = _make_cleaned(
+            median=129.20, p25=124.0, p75=132.0, iqr=8.0, cv=0.03, n=24,
+        )
+        result = compute_pricing(cleaned)
+        assert result.market_list == 129.20
+        assert result.quick_list == round(129.20 * 0.90, 2)
+        assert result.stretch_list == round(129.20 * 1.10, 2)
