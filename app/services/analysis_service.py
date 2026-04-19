@@ -35,6 +35,8 @@ from app.schemas.analysis import (
     CompsInfo,
     ConditionAnalysisOut,
     ConfidenceOut,
+    ExecutionAnalysisOut,
+    ExecutionPenaltyOut,
     ListingStrategyOut,
     MarketEventOut,
     MarketIntelligenceOut,
@@ -62,6 +64,11 @@ from app.services.engines.product_categorizer import categorize_product
 from app.services.engines.title_enricher import enrich_listings
 from app.services.engines.competition_engine import compute_competition
 from app.services.engines.confidence_engine import compute_confidence
+from app.services.engines.execution_engine import (
+    ExecutionResult,
+    cap_recommendation,
+    compute_execution,
+)
 from app.services.engines.listing_strategy import compute_listing_strategy
 from app.services.engines.max_buy_price import compute_max_buy
 from app.services.engines.pricing_engine import compute_pricing
@@ -255,6 +262,7 @@ class _PipelineResult:
     has_valid_comps: bool
     comps_info: CompsInfo | None
     estimated_sale: float | None
+    execution: ExecutionResult | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +419,32 @@ def _run_pipeline(
     comps_info, _ = _build_comps_info(cleaned, source=f"{marketplace_name}_cleaned")
     estimated_sale = pricing.market_list if has_valid_comps else None
 
+    execution = compute_execution(
+        marketplace_name=marketplace_name,
+        profit_market=profit_market,
+        risk=risk,
+        confidence=confidence,
+        competition=competition,
+        trend=trend,
+        cleaned=cleaned,
+        raw_comps=raw_comps,
+        distribution_shape=distribution_shape,
+        product_type=product_type,
+    )
+    capped_recommendation = cap_recommendation(
+        recommendation,
+        execution.max_recommendation,
+    )
+    if capped_recommendation != recommendation:
+        warnings.append(
+            f"Execution risk caps this marketplace at '{execution.max_recommendation}'. "
+            f"{execution.quantity_guidance} recommended."
+        )
+        recommendation = capped_recommendation
+    for warning in execution.warnings:
+        if warning not in warnings:
+            warnings.append(warning)
+
     # Gate: sin comps → pass
     if not has_valid_comps and recommendation != "pass":
         recommendation = "pass"
@@ -451,6 +485,7 @@ def _run_pipeline(
         has_valid_comps=has_valid_comps,
         comps_info=comps_info,
         estimated_sale=estimated_sale,
+        execution=execution,
     )
 
 
@@ -478,7 +513,31 @@ def _pipeline_to_marketplace_analysis(p: _PipelineResult) -> MarketplaceAnalysis
         listing_strategy=ListingStrategyOut(**asdict(p.listing)) if v else None,
         title_risk=TitleRiskOut(**asdict(p.title_risk)),
         condition_analysis=p.condition_analysis,
+        execution_analysis=_execution_to_schema(p.execution) if p.execution else None,
         warnings=p.warnings,
+    )
+
+
+def _execution_to_schema(execution: ExecutionResult) -> ExecutionAnalysisOut:
+    """Convierte ExecutionResult dataclass a schema API."""
+    return ExecutionAnalysisOut(
+        score=execution.score,
+        category=execution.category,
+        win_probability=execution.win_probability,
+        expected_profit=execution.expected_profit,
+        max_recommendation=execution.max_recommendation,
+        quantity_guidance=execution.quantity_guidance,
+        channel_role=execution.channel_role,
+        penalties=[
+            ExecutionPenaltyOut(
+                code=p.code,
+                severity=p.severity,
+                points=p.points,
+                message=p.message,
+            )
+            for p in execution.penalties
+        ],
+        warnings=execution.warnings,
     )
 
 
@@ -520,6 +579,38 @@ def _compute_opportunity_score(
     )
 
     return min(100, max(0, round(score)))
+
+
+def _compute_final_score(market_score: int, execution_score: int) -> int:
+    """Score final: market opportunity con ajuste por execution risk."""
+    return min(100, max(0, round(0.65 * market_score + 0.35 * execution_score)))
+
+
+def _build_execution_text(
+    *,
+    primary: _PipelineResult,
+    best_profit_marketplace: str,
+    recommended_marketplace: str,
+    final_score: int,
+) -> str:
+    """Bloque compacto para que la IA explique execution risk accionable."""
+    if not primary.execution:
+        return ""
+    e = primary.execution
+    penalties = ", ".join(p.code for p in e.penalties[:5]) or "none"
+    return (
+        "\n\nEXECUTION ANALYSIS:\n"
+        f"- Market score: {primary.opportunity}/100\n"
+        f"- Execution score: {e.score}/100 ({e.category})\n"
+        f"- Final score: {final_score}/100\n"
+        f"- Win probability: {e.win_probability:.0%}\n"
+        f"- Expected execution-weighted profit: ${e.expected_profit:.2f}\n"
+        f"- Recommended channel: {recommended_marketplace}\n"
+        f"- Best raw profit channel: {best_profit_marketplace}\n"
+        f"- Quantity guidance: {e.quantity_guidance}\n"
+        f"- Main execution penalties: {penalties}\n"
+        "Lead the recommendation with the execution guidance, not only raw ROI."
+    )
 
 
 def _decide(opportunity_score: int, profit_market, risk, confidence) -> str:
@@ -1146,46 +1237,77 @@ async def run_analysis_progressive(
     )
 
     # -----------------------------------------------------------------------
-    # 4. Seleccionar pipeline primario (el del marketplace solicitado)
-    #    Si el marketplace solicitado no tiene datos, fallback al que sí tenga.
-    # -----------------------------------------------------------------------
-    if marketplace == "amazon_fba" and amazon_pipeline and amazon_pipeline.has_valid_comps:
-        primary = amazon_pipeline
-    elif ebay_pipeline.has_valid_comps:
-        primary = ebay_pipeline
-    elif amazon_pipeline and amazon_pipeline.has_valid_comps:
-        primary = amazon_pipeline
-        logger.info("eBay sin datos válidos, usando Amazon como pipeline primario")
-    else:
-        primary = ebay_pipeline
-
-    # -----------------------------------------------------------------------
-    # 5. Determinar best_marketplace comparando profit real de cada pipeline
+    # 4. Determinar canal recomendado con execution-aware expected profit.
     # -----------------------------------------------------------------------
     candidates = [ebay_pipeline]
     if amazon_pipeline:
         candidates.append(amazon_pipeline)
     valid_candidates = [c for c in candidates if c.has_valid_comps]
+
     if valid_candidates:
         best_by_profit = max(valid_candidates, key=lambda c: c.profit_market.profit)
-        best_by_opportunity = max(valid_candidates, key=lambda c: c.opportunity)
+        best_by_execution = max(
+            valid_candidates,
+            key=lambda c: (
+                c.execution.expected_profit if c.execution else c.profit_market.profit,
+                c.execution.score if c.execution else 0,
+            ),
+        )
 
-        # Si el mismo marketplace gana en ambas métricas, es claro
-        if best_by_profit.marketplace_name == best_by_opportunity.marketplace_name:
-            best_marketplace = best_by_profit.marketplace_name
-            best_marketplace_reason = "best_profit"
-        else:
-            # Diferente ganador: priorizar profit (es lo que importa al seller)
-            best_marketplace = best_by_profit.marketplace_name
-            best_marketplace_reason = "best_profit"
+        for c in valid_candidates:
+            if c.execution:
+                c.execution.channel_role = "candidate"
+        if best_by_profit.execution:
+            best_by_profit.execution.channel_role = "best_profit"
+        if best_by_execution.execution:
+            best_by_execution.execution.channel_role = "recommended"
+
+        primary = best_by_execution
+        best_profit_marketplace = best_by_profit.marketplace_name
+        recommended_marketplace = best_by_execution.marketplace_name
+        best_marketplace = recommended_marketplace
+        best_marketplace_reason = (
+            "best_profit"
+            if best_profit_marketplace == recommended_marketplace
+            else "best_execution"
+        )
+
+        if (
+            primary.recommendation == "buy"
+            and best_by_profit.marketplace_name != primary.marketplace_name
+            and best_by_profit.execution
+            and best_by_profit.execution.score < 55
+        ):
+            primary.recommendation = "buy_small"
+            primary.warnings.append(
+                "Best-profit channel has low execution probability; "
+                "overall buy quantity is capped."
+            )
     else:
+        # Fallback primario si ningún marketplace tiene comps útiles.
+        if marketplace == "amazon_fba" and amazon_pipeline:
+            primary = amazon_pipeline
+        else:
+            primary = ebay_pipeline
         best_marketplace = primary.marketplace_name
         best_marketplace_reason = "only_available"
+        best_profit_marketplace = primary.marketplace_name
+        recommended_marketplace = primary.marketplace_name
+
+    market_score = primary.opportunity if primary.has_valid_comps else 0
+    execution_score = primary.execution.score if primary.execution else 0
+    final_score = _compute_final_score(market_score, execution_score)
 
     # -----------------------------------------------------------------------
     # 6a. Iniciar tareas AI (non-blocking, corren mientras construimos chunk 1)
     # -----------------------------------------------------------------------
     comparison_text = _build_comparison_text(ebay_pipeline, amazon_pipeline)
+    execution_text = _build_execution_text(
+        primary=primary,
+        best_profit_marketplace=best_profit_marketplace,
+        recommended_marketplace=recommended_marketplace,
+        final_score=final_score,
+    )
 
     explanation_task = asyncio.create_task(generate_explanation(
         keyword=kw,
@@ -1204,7 +1326,7 @@ async def run_analysis_progressive(
         recommendation=primary.recommendation,
         cleaned_total=primary.cleaned.clean_total,
         raw_total=primary.cleaned.raw_total,
-        comparison_text=comparison_text,
+        comparison_text=(comparison_text or "") + execution_text,
     ))
 
     intel_task = None
@@ -1251,28 +1373,40 @@ async def run_analysis_progressive(
             return_reserve_pct=return_reserve_pct,
             has_own_data=own_data_markets,
         )
-        if channels and amazon_pipeline and amazon_pipeline.has_valid_comps:
-            amz_sale = amazon_pipeline.pricing.market_list
-            for i, ch in enumerate(channels):
-                if ch.marketplace == "amazon_fba":
-                    fees = MARKETPLACE_CALCULATORS["amazon_fba"](Decimal(str(amz_sale)))
+        if channels:
+            for pipeline in candidates:
+                if not pipeline.has_valid_comps:
+                    continue
+                if pipeline.marketplace_name not in MARKETPLACE_CALCULATORS:
+                    continue
+                sale = pipeline.pricing.market_list
+                for i, ch in enumerate(channels):
+                    if ch.marketplace != pipeline.marketplace_name:
+                        continue
+                    fees = MARKETPLACE_CALCULATORS[pipeline.marketplace_name](Decimal(str(sale)))
                     gross = fees["net_proceeds"]
                     net = gross - shipping_cost - packaging_cost - promo_cost
-                    ret_reserve = amz_sale * return_reserve_pct
+                    ret_reserve = sale * return_reserve_pct
                     profit = net - ret_reserve - cost_price - prep_cost
                     invested = cost_price + prep_cost
                     channels[i] = ChannelBreakdown(
-                        marketplace="amazon_fba",
-                        estimated_sale_price=amz_sale,
+                        marketplace=pipeline.marketplace_name,
+                        estimated_sale_price=sale,
                         net_proceeds=round(net - ret_reserve, 2),
                         profit=round(profit, 2),
                         roi_pct=round(profit / invested * 100, 2) if invested > 0 else 0,
-                        margin_pct=round(profit / amz_sale * 100, 2) if amz_sale > 0 else 0,
+                        margin_pct=round(profit / sale * 100, 2) if sale > 0 else 0,
                         is_estimated=False,
                     )
                     break
             channels.sort(key=lambda c: c.profit, reverse=True)
             _assign_channel_labels(channels)
+            _attach_execution_to_channels(
+                channels,
+                candidates,
+                recommended_marketplace=recommended_marketplace,
+                best_profit_marketplace=best_profit_marketplace,
+            )
     else:
         estimated_sale = None
         channels = None
@@ -1280,8 +1414,6 @@ async def run_analysis_progressive(
     # Summary con valores pre-intelligence
     signal_map = {"buy": "positive", "buy_small": "positive", "watch": "caution", "pass": "negative"}
     best_max_buy = primary.max_buy.recommended_max if has_valid_comps else 0.0
-    if amazon_pipeline and amazon_pipeline.has_valid_comps:
-        best_max_buy = max(best_max_buy, amazon_pipeline.max_buy.recommended_max)
     headroom = (best_max_buy - cost_price) if has_valid_comps else 0.0
     signal = signal_map.get(primary.recommendation, "neutral")
     summary = AnalysisSummary(
@@ -1356,8 +1488,12 @@ async def run_analysis_progressive(
         88,
         {
             "best_marketplace": best_marketplace,
+            "best_profit_marketplace": best_profit_marketplace,
+            "recommended_marketplace": recommended_marketplace,
             "recommendation": primary.recommendation,
             "opportunity": primary.opportunity if has_valid_comps else None,
+            "execution_score": primary.execution.score if primary.execution else None,
+            "final_score": final_score,
         },
     )
     partial_response = AnalysisResponse(
@@ -1383,6 +1519,11 @@ async def run_analysis_progressive(
         amazon_analysis=amazon_analysis,
         best_marketplace=best_marketplace,
         best_marketplace_reason=best_marketplace_reason,
+        best_profit_marketplace=best_profit_marketplace,
+        recommended_marketplace=recommended_marketplace,
+        execution_analysis=_execution_to_schema(primary.execution) if primary.execution else None,
+        market_score=market_score,
+        final_score=final_score,
         created_at=datetime.now(timezone.utc),
     )
     yield {"event": "analysis", "data": partial_response}
@@ -1510,6 +1651,17 @@ async def run_analysis_progressive(
         "title_risk": asdict(primary.title_risk),
         "condition_analysis": primary.condition_analysis.model_dump(),
         "opportunity_score": opportunity,
+        "market_score": market_score,
+        "execution_score": execution_score,
+        "final_score": final_score,
+        "best_profit_marketplace": best_profit_marketplace,
+        "recommended_marketplace": recommended_marketplace,
+        "execution": asdict(primary.execution) if primary.execution else None,
+        "marketplace_execution": {
+            p.marketplace_name: asdict(p.execution)
+            for p in candidates
+            if p.execution is not None
+        },
         "market_intelligence": asdict(market_intel) if market_intel else None,
         "cleaned_comps": {
             "raw_total": primary.cleaned.raw_total,
@@ -1913,3 +2065,32 @@ def _assign_channel_labels(channels: list[ChannelBreakdown]) -> None:
         if best_roi_idx != 0:
             channels[best_roi_idx].label = "BEST ROI"
     # Si ninguno es rentable, no se asigna label
+
+
+def _attach_execution_to_channels(
+    channels: list[ChannelBreakdown],
+    pipelines: list[_PipelineResult],
+    *,
+    recommended_marketplace: str,
+    best_profit_marketplace: str,
+) -> None:
+    """Agrega execution metadata a channels sin reemplazar labels de profit."""
+    by_marketplace = {p.marketplace_name: p for p in pipelines}
+    for ch in channels:
+        p = by_marketplace.get(ch.marketplace)
+        if not p or not p.execution:
+            ch.channel_role = "candidate"
+            continue
+
+        execution = p.execution
+        role = "candidate"
+        if ch.marketplace == recommended_marketplace:
+            role = "recommended"
+        elif ch.marketplace == best_profit_marketplace:
+            role = "test_only" if execution.score < 55 else "best_profit"
+
+        ch.execution_score = execution.score
+        ch.win_probability = execution.win_probability
+        ch.expected_profit = execution.expected_profit
+        ch.channel_role = role
+        ch.execution_note = execution.quantity_guidance

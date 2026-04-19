@@ -32,6 +32,11 @@ class ChannelBreakdown(BaseModel):
     margin_pct: float    # profit / sale_price * 100
     label: str | None = None        # "BEST PROFIT" | "BEST ROI" | None
     is_estimated: bool = False      # True si no tiene datos scrapeados propios
+    execution_score: int | None = None
+    win_probability: float | None = None
+    expected_profit: float | None = None
+    channel_role: str | None = None  # recommended|best_profit|test_only|candidate
+    execution_note: str | None = None
 
 
 class PriceBucketOut(BaseModel):
@@ -172,6 +177,25 @@ class ConditionAnalysisOut(BaseModel):
     condition_subset_pricing: dict | None = None  # Mini-pipeline: {count, median, profit, roi_pct, margin_pct, max_buy}
 
 
+class ExecutionPenaltyOut(BaseModel):
+    code: str
+    severity: str
+    points: int
+    message: str
+
+
+class ExecutionAnalysisOut(BaseModel):
+    score: int
+    category: str
+    win_probability: float
+    expected_profit: float
+    max_recommendation: str
+    quantity_guidance: str
+    channel_role: str = "candidate"
+    penalties: list[ExecutionPenaltyOut] = []
+    warnings: list[str] = []
+
+
 class MarketplaceAnalysis(BaseModel):
     """Análisis completo de un marketplace individual."""
     marketplace: str          # "ebay", "amazon"
@@ -194,6 +218,7 @@ class MarketplaceAnalysis(BaseModel):
     listing_strategy: ListingStrategyOut | None = None
     title_risk: TitleRiskOut | None = None
     condition_analysis: ConditionAnalysisOut | None = None
+    execution_analysis: ExecutionAnalysisOut | None = None
     warnings: list[str] = []
 
 
@@ -292,6 +317,11 @@ class AnalysisResponse(BaseModel):
     amazon_analysis: MarketplaceAnalysis | None = None
     best_marketplace: str | None = None  # marketplace con mejor oportunidad
     best_marketplace_reason: str | None = None  # "best_profit" | "best_opportunity"
+    best_profit_marketplace: str | None = None
+    recommended_marketplace: str | None = None
+    execution_analysis: ExecutionAnalysisOut | None = None
+    market_score: int | None = None
+    final_score: int | None = None
 
     created_at: datetime
 
