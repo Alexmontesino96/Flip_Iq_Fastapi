@@ -1,3 +1,5 @@
+import logging
+
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -7,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models.user import User
+
+logger = logging.getLogger(__name__)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
@@ -29,7 +33,8 @@ async def get_current_user(
             algorithms=["HS256"],
             audience="authenticated",
         )
-    except jwt.PyJWTError:
+    except jwt.PyJWTError as e:
+        logger.warning("JWT decode failed: %s (token: %s...)", e, token[:30] if token else "")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
@@ -64,5 +69,6 @@ async def get_current_user_optional(
         return None
     try:
         return await get_current_user(token=token, db=db)
-    except HTTPException:
+    except HTTPException as e:
+        logger.warning("Auth optional failed: %s (token starts with: %s...)", e.detail, token[:20] if token else "")
         return None
