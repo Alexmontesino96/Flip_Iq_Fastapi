@@ -98,19 +98,20 @@ class FakeListing:
 
 
 class TestSystemPrompt:
-    def test_prompt_mentions_4_paragraphs(self):
-        assert "4 paragraphs" in SYSTEM_PROMPT
+    def test_prompt_mentions_decision_brief(self):
+        assert "4 short lines" in SYSTEM_PROMPT
+        assert "Decision:" in SYSTEM_PROMPT
 
     def test_prompt_has_structure_guidance(self):
-        assert "Market Overview" in SYSTEM_PROMPT
-        assert "Profit Analysis" in SYSTEM_PROMPT
-        assert "Risk Factors" in SYSTEM_PROMPT
-        assert "Recommendation" in SYSTEM_PROMPT
+        assert "Why:" in SYSTEM_PROMPT
+        assert "Risk:" in SYSTEM_PROMPT
+        assert "Action:" in SYSTEM_PROMPT
+        assert "under 110 words" in SYSTEM_PROMPT
 
 
 class TestMaxTokens:
     @pytest.mark.asyncio
-    async def test_max_tokens_at_least_1200(self):
+    async def test_max_tokens_keeps_decision_brief_short(self):
         mock_response = MagicMock()
         mock_response.choices = [MagicMock(message=MagicMock(content="Test explanation"))]
 
@@ -138,7 +139,8 @@ class TestMaxTokens:
             )
 
             call_kwargs = mock_client.chat.completions.create.call_args[1]
-            assert call_kwargs["max_tokens"] >= 2000
+            assert call_kwargs["max_tokens"] <= 800
+            assert call_kwargs["temperature"] <= 0.3
 
 
 class TestGenerateExplanation:

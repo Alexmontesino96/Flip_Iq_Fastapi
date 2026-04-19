@@ -459,6 +459,8 @@ def _run_pipeline(
                     "No valid comps. Cannot estimate sale price."
                 )
 
+    warnings = _dedupe_warnings(warnings)
+
     return _PipelineResult(
         marketplace_name=marketplace_name,
         raw_comps=raw_comps,
@@ -584,6 +586,60 @@ def _compute_opportunity_score(
 def _compute_final_score(market_score: int, execution_score: int) -> int:
     """Score final: market opportunity con ajuste por execution risk."""
     return min(100, max(0, round(0.65 * market_score + 0.35 * execution_score)))
+
+
+def _warning_category(warning: str) -> str | None:
+    """Categoria semantica para evitar warnings duplicados con distinto texto."""
+    w = warning.lower()
+    if "confidence" in w:
+        return "confidence"
+    if "only" in w and ("comp" in w or "clean" in w):
+        return "small_sample"
+    if "comps after" in w or "clean comps" in w:
+        return "small_sample"
+    if "fba fees" in w or "generic estimate" in w:
+        return "fba_fees"
+    if "bimodal" in w or "distribution" in w:
+        return "price_distribution"
+    if "seller" in w or "buy box" in w:
+        return "seller_concentration"
+    if "fallback" in w:
+        return "fallback_source"
+    if "blocked" in w or "partial" in w or "source status" in w:
+        return "source_status"
+    if "condition" in w or "mixed comps" in w:
+        return "condition"
+    if "demand" in w or "trend" in w:
+        return "demand"
+    if "execution risk caps" in w:
+        return "execution_cap"
+    return None
+
+
+def _dedupe_warnings(warnings: list[str]) -> list[str]:
+    """Deduplica warnings por texto exacto y por categoria semantica."""
+    seen_text: set[str] = set()
+    seen_categories: set[str] = set()
+    result: list[str] = []
+
+    for warning in warnings:
+        normalized = " ".join(warning.strip().split())
+        if not normalized:
+            continue
+        text_key = normalized.lower()
+        if text_key in seen_text:
+            continue
+
+        category = _warning_category(normalized)
+        if category and category in seen_categories:
+            continue
+
+        seen_text.add(text_key)
+        if category:
+            seen_categories.add(category)
+        result.append(normalized)
+
+    return result
 
 
 def _build_execution_text(
@@ -1602,6 +1658,8 @@ async def run_analysis_progressive(
             warnings.append(
                 "Market intelligence recommends waiting before buying."
             )
+
+    warnings = _dedupe_warnings(warnings)
 
     # Rebuild summary con valores finales
     signal = signal_map.get(recommendation, "neutral")

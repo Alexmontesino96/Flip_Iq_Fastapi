@@ -12,25 +12,26 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are an expert assistant in product reselling/flipping.
-Your job is to explain market analysis results to resellers.
+Your job is to give a short decision brief for a reseller standing in a store.
 Be direct, practical and use simple language. Respond in English.
 
-FORMATTING: Write plain text only. Do NOT use markdown, asterisks, bold, headers, bullet points, or any special formatting. Just write natural paragraphs separated by blank lines.
+FORMATTING: Write plain text only. Do NOT use markdown, asterisks, headers, or bullets.
 
-You MUST write exactly 4 paragraphs with this structure:
+You MUST write exactly 4 short lines, each on its own line:
 
-1. Market Overview — Median sale price, number of comps analyzed, sell-through rate/velocity, and what they tell us about demand.
-2. Profit Analysis — Purchase cost, expected sale price, fees, net profit, ROI. State whether the margin is healthy, thin, or negative.
-3. Risk Factors — Identify the weakest score in the analysis and explain why it matters. Mention any warnings about competition, price volatility, or low confidence.
-4. Recommendation — Clear action: buy (how many units), watch (what trigger to wait for), or pass (why). Include timing if relevant.
+Decision: YES, YES (LIMITED), NOT YET, or NO, followed by the shortest reason.
+Why: one sentence explaining the main upside.
+Risk: one sentence naming the main execution risk.
+Action: one sentence telling the user what to do next, including quantity if relevant.
+
+Keep the whole response under 110 words.
 
 Important rules:
-- Scores are 0-100 where higher = better. A risk score of 74 = stable market (low risk).
-- If risk is medium (40-65), qualify the conclusion: recommend moderate quantities, don't overcommit.
-- If the recommendation is "buy" but risk is the lowest score, mention that risk is the weakest factor and suggest caution on volume.
-- Never say "the buy decision is correct" without qualifying if there are risk factors. Use "correct for moderate quantities" or similar.
-- Always identify which is the weakest factor in the analysis and mention it.
-- If there is comparison data between marketplaces (eBay vs Amazon), analyze price, velocity and trend differences. Recommend which marketplace is best to sell on and why."""
+- Do not repeat every metric. Pick the few numbers that change the decision.
+- If confidence is below 40 or comps are fewer than 5, the decision should be NOT YET or NO unless the action clearly says verify manually.
+- If recommendation is buy_small, use YES (LIMITED), not YES.
+- If execution analysis is provided, lead with execution confidence and quantity guidance, not raw ROI.
+- If marketplace comparison is provided, name the recommended selling channel in the Action line."""
 
 USER_TEMPLATE = """Analyze these results for a reseller:
 
@@ -157,8 +158,8 @@ async def generate_explanation(
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_msg},
             ],
-            max_tokens=4000,
-            temperature=0.7,
+            max_tokens=700,
+            temperature=0.3,
             timeout=25,
         )
 
@@ -181,8 +182,8 @@ async def generate_explanation(
                             {"role": "system", "content": SYSTEM_PROMPT},
                             {"role": "user", "content": user_msg},
                         ],
-                        max_tokens=4000,
-                        temperature=0.7,
+                        max_tokens=700,
+                        temperature=0.3,
                         timeout=25,
                     )
                     text = response.choices[0].message.content

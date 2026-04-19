@@ -79,3 +79,26 @@ class TestAssignChannelLabels:
         from app.services.analysis_service import _assign_channel_labels
 
         _assign_channel_labels([])
+
+
+class TestWarningDedupe:
+    """Semantic warning dedupe keeps the result screen readable."""
+
+    def test_dedupes_same_confidence_and_sample_warnings(self):
+        from app.services.analysis_service import _dedupe_warnings
+
+        warnings = [
+            "Amazon: Low analysis confidence (11/100). Consider buying smaller quantities.",
+            "Amazon: Low confidence (11/100) makes execution uncertain.",
+            "Amazon: Only 3 comps after cleanup. Results may not be representative.",
+            "Amazon: Only 3 clean comps after filtering.",
+            "Amazon FBA fees use a generic estimate; confirm category and fulfillment costs before buying.",
+            "Amazon FBA fees use a generic estimate; confirm category and fulfillment costs before buying.",
+        ]
+
+        result = _dedupe_warnings(warnings)
+
+        assert len(result) == 3
+        assert result[0].startswith("Amazon: Low analysis confidence")
+        assert result[1].startswith("Amazon: Only 3 comps")
+        assert result[2].startswith("Amazon FBA fees")
