@@ -181,3 +181,109 @@ async def get_analysis_history(
         )
         for a, title in rows
     ]
+
+
+@router.get("/{analysis_id}")
+async def get_analysis_detail(
+    analysis_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    query = (
+        select(Analysis)
+        .where(Analysis.id == analysis_id, Analysis.user_id == user.id)
+    )
+    result = await db.execute(query)
+    a = result.scalar_one_or_none()
+    if a is None:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    product = await db.get(Product, a.product_id)
+
+    # Reconstruct summary from engines_data
+    engines = a.engines_data or {}
+    pricing = engines.get("pricing", {})
+    profit = engines.get("profit_market", {})
+    max_buy = engines.get("max_buy", {})
+    velocity = engines.get("velocity", {})
+    risk = engines.get("risk", {})
+    confidence = engines.get("confidence", {})
+
+    summary = None
+    if pricing:
+        cost = float(a.cost_price)
+        net = float(a.net_profit) if a.net_profit else 0
+        sale = float(a.estimated_sale_price) if a.estimated_sale_price else 0
+        summary = {
+            "recommendation": a.recommendation or "pass",
+            "signal": "positive" if a.recommendation in ("buy", "buy_small") else "neutral",
+            "buy_box": {
+                "recommended_max_buy": max_buy.get("max_buy_price", 0),
+                "your_cost": cost,
+                "headroom": max_buy.get("max_buy_price", 0) - cost,
+            },
+            "sale_plan": {
+                "recommended_list_price": pricing.get("recommended_price", sale),
+                "quick_sale_price": pricing.get("quick_price", 0),
+                "stretch_price": pricing.get("stretch_price"),
+            },
+            "returns": {
+                "profit": net,
+                "roi_pct": float(a.roi_pct) if a.roi_pct else 0,
+                "margin_pct": float(a.margin_pct) if a.margin_pct else 0,
+            },
+            "risk": risk.get("category", "medium"),
+            "confidence": confidence.get("category", "medium"),
+            "warnings": [],
+        }
+
+    # Reconstruct ebay comps from engines_data
+    ebay_analysis = None
+    cleaned = engines.get("cleaned_comps", {})
+    if cleaned:
+        ebay_analysis = {
+            "marketplace": "ebay",
+            "comps": {
+                "total_sold": cleaned.get("clean_total", 0),
+                "median_price": pricing.get("median_price", 0),
+                "p25": pricing.get("p25", 0),
+                "p75": pricing.get("p75", 0),
+                "sales_per_day": velocity.get("sales_per_day", 0),
+                "days_of_data": velocity.get("days_of_data", 0),
+            },
+            "velocity": {
+                "score": velocity.get("score"),
+                "category": velocity.get("category"),
+            },
+            "confidence": {
+                "score": confidence.get("score"),
+                "category": confidence.get("category"),
+            },
+        }
+
+    return {
+        "id": a.id,
+        "product": {
+            "id": product.id,
+            "barcode": product.barcode,
+            "title": product.title,
+            "brand": product.brand,
+            "image_url": product.image_url,
+        } if product else None,
+        "cost_price": float(a.cost_price),
+        "marketplace": a.marketplace,
+        "estimated_sale_price": float(a.estimated_sale_price) if a.estimated_sale_price else None,
+        "net_profit": float(a.net_profit) if a.net_profit else None,
+        "margin_pct": float(a.margin_pct) if a.margin_pct else None,
+        "roi_pct": float(a.roi_pct) if a.roi_pct else None,
+        "flip_score": a.flip_score,
+        "risk_score": a.risk_score,
+        "velocity_score": a.velocity_score,
+        "recommendation": a.recommendation,
+        "channels": a.channels,
+        "summary": summary,
+        "ai_explanation": a.ai_explanation,
+        "ebay_analysis": ebay_analysis,
+        "amazon_analysis": None,
+        "created_at": a.created_at.isoformat(),
+    }
