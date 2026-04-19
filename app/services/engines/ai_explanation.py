@@ -27,6 +27,9 @@ Action: one sentence telling the user what to do next, including quantity if rel
 Keep the whole response under 110 words.
 
 Important rules:
+- The Decision line MUST match the provided DECISION value exactly:
+  buy = YES, buy_small = YES (LIMITED), watch = NOT YET, pass = NO.
+  Do not upgrade or downgrade that label in the AI text.
 - Do not repeat every metric. Pick the few numbers that change the decision.
 - If confidence is below 40 or comps are fewer than 5, the decision should be NOT YET or NO unless the action clearly says verify manually.
 - If recommendation is buy_small, use YES (LIMITED), not YES.
@@ -84,6 +87,40 @@ def _strip_markdown(text: str) -> str:
     # Remove numbered markdown lists with dots: 1. item → item (but keep "1." mid-sentence)
     text = re.sub(r"^\d+\.\s+", "", text, flags=re.MULTILINE)
     return text.strip()
+
+
+_DECISION_LABELS = {
+    "buy": "YES",
+    "buy_small": "YES (LIMITED)",
+    "watch": "NOT YET",
+    "pass": "NO",
+}
+
+
+def _align_decision_line(text: str, recommendation: str) -> str:
+    """Keep the AI brief's first line aligned with the deterministic engine."""
+    label = _DECISION_LABELS.get(recommendation)
+    if not text or not label:
+        return text
+
+    lines = text.splitlines()
+    if not lines:
+        return f"Decision: {label}"
+
+    first = lines[0].strip()
+    if first.lower().startswith("decision:"):
+        reason = first.split(":", 1)[1].strip()
+        reason = re.sub(
+            r"^(YES\s*\(LIMITED\)|YES|NOT\s+YET|NO)(?:\s*[,;:.-]\s*|\s+|$)",
+            "",
+            reason,
+            flags=re.IGNORECASE,
+        ).strip()
+        lines[0] = f"Decision: {label}" + (f", {reason}" if reason else "")
+    else:
+        lines.insert(0, f"Decision: {label}")
+
+    return "\n".join(lines)
 
 
 async def generate_explanation(
@@ -166,7 +203,7 @@ async def generate_explanation(
         text = response.choices[0].message.content
         if response.choices[0].finish_reason == "length":
             logger.warning("AI explanation truncated (hit max_tokens)")
-        return _strip_markdown(text)
+        return _align_decision_line(_strip_markdown(text), recommendation)
 
     except Exception as e:
         # Auto-fallback a OpenAI si Gemini falla
@@ -189,7 +226,7 @@ async def generate_explanation(
                     text = response.choices[0].message.content
                     if response.choices[0].finish_reason == "length":
                         logger.warning("AI explanation truncated on fallback (hit max_tokens)")
-                    return _strip_markdown(text)
+                    return _align_decision_line(_strip_markdown(text), recommendation)
                 except Exception as e2:
                     logger.warning("OpenAI fallback also failed: %s", e2)
         logger.warning("AI explanation failed: %s", e)

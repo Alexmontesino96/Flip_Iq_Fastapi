@@ -5,7 +5,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.engines.ai_explanation import SYSTEM_PROMPT, generate_explanation
+from app.services.engines.ai_explanation import (
+    SYSTEM_PROMPT,
+    _align_decision_line,
+    generate_explanation,
+)
 
 
 # --- Fake dataclasses para simular inputs ---
@@ -108,6 +112,24 @@ class TestSystemPrompt:
         assert "Action:" in SYSTEM_PROMPT
         assert "under 110 words" in SYSTEM_PROMPT
 
+    def test_prompt_requires_decision_to_match_engine(self):
+        assert "DECISION value exactly" in SYSTEM_PROMPT
+
+
+class TestDecisionAlignment:
+    def test_aligns_yes_limited_to_watch(self):
+        text = "Decision: YES (LIMITED), due to low confidence.\nWhy: Upside exists."
+
+        result = _align_decision_line(text, "watch")
+
+        assert result.startswith("Decision: NOT YET, due to low confidence.")
+        assert "Why: Upside exists." in result
+
+    def test_aligns_missing_decision_line(self):
+        result = _align_decision_line("Why: Upside exists.", "buy_small")
+
+        assert result.startswith("Decision: YES (LIMITED)\n")
+
 
 class TestMaxTokens:
     @pytest.mark.asyncio
@@ -199,4 +221,4 @@ class TestGenerateExplanation:
             call_kwargs = mock_client.chat.completions.create.call_args[1]
             user_msg = call_kwargs["messages"][1]["content"]
             assert "eBay vs Amazon comparison data here" in user_msg
-            assert result == "With comparison"
+            assert result == "Decision: YES\nWith comparison"

@@ -588,6 +588,55 @@ def _compute_final_score(market_score: int, execution_score: int) -> int:
     return min(100, max(0, round(0.65 * market_score + 0.35 * execution_score)))
 
 
+def _pipeline_expected_profit(p: _PipelineResult) -> float:
+    if p.execution:
+        return p.execution.expected_profit
+    return p.profit_market.profit
+
+
+def _is_actionable_channel_candidate(p: _PipelineResult) -> bool:
+    """Can this marketplace lead the user-facing buy decision?"""
+    if not p.has_valid_comps or not p.execution:
+        return False
+    if p.recommendation not in {"buy", "buy_small"}:
+        return False
+    if p.cleaned.clean_total < 5:
+        return False
+    if p.confidence.score < 40:
+        return False
+    if p.execution.score < 55:
+        return False
+    return p.execution.expected_profit > 0
+
+
+def _select_primary_marketplace(
+    valid_candidates: list[_PipelineResult],
+) -> tuple[_PipelineResult, _PipelineResult, str | None, str]:
+    """Choose primary channel without letting weak data dominate the decision."""
+    best_by_profit = max(valid_candidates, key=lambda c: c.profit_market.profit)
+    sort_key = lambda c: (
+        _pipeline_expected_profit(c),
+        c.execution.score if c.execution else 0,
+        c.profit_market.profit,
+    )
+
+    actionable = [c for c in valid_candidates if _is_actionable_channel_candidate(c)]
+    if actionable:
+        primary = max(actionable, key=sort_key)
+        recommended_marketplace: str | None = primary.marketplace_name
+        reason = (
+            "best_profit"
+            if best_by_profit.marketplace_name == recommended_marketplace
+            else "best_execution"
+        )
+    else:
+        primary = max(valid_candidates, key=sort_key)
+        recommended_marketplace = None
+        reason = "best_available_untrusted"
+
+    return primary, best_by_profit, recommended_marketplace, reason
+
+
 def _warning_category(warning: str) -> str | None:
     """Categoria semantica para evitar warnings duplicados con distinto texto."""
     w = warning.lower()
@@ -646,7 +695,7 @@ def _build_execution_text(
     *,
     primary: _PipelineResult,
     best_profit_marketplace: str,
-    recommended_marketplace: str,
+    recommended_marketplace: str | None,
     final_score: int,
 ) -> str:
     """Bloque compacto para que la IA explique execution risk accionable."""
@@ -654,14 +703,15 @@ def _build_execution_text(
         return ""
     e = primary.execution
     penalties = ", ".join(p.code for p in e.penalties[:5]) or "none"
+    recommended_label = recommended_marketplace or "None yet; verify manually"
     return (
         "\n\nEXECUTION ANALYSIS:\n"
         f"- Market score: {primary.opportunity}/100\n"
         f"- Execution score: {e.score}/100 ({e.category})\n"
         f"- Final score: {final_score}/100\n"
-        f"- Win probability: {e.win_probability:.0%}\n"
+        f"- Execution confidence: {e.win_probability:.0%}\n"
         f"- Expected execution-weighted profit: ${e.expected_profit:.2f}\n"
-        f"- Recommended channel: {recommended_marketplace}\n"
+        f"- Recommended channel: {recommended_label}\n"
         f"- Best raw profit channel: {best_profit_marketplace}\n"
         f"- Quantity guidance: {e.quantity_guidance}\n"
         f"- Main execution penalties: {penalties}\n"
@@ -1301,13 +1351,29 @@ async def run_analysis_progressive(
     valid_candidates = [c for c in candidates if c.has_valid_comps]
 
     if valid_candidates:
-        best_by_profit = max(valid_candidates, key=lambda c: c.profit_market.profit)
-        best_by_execution = max(
-            valid_candidates,
-            key=lambda c: (
-                c.execution.expected_profit if c.execution else c.profit_market.profit,
-                c.execution.score if c.execution else 0,
-            ),
+        (
+            primary,
+            best_by_profit,
+            recommended_marketplace,
+            best_marketplace_reason,
+        ) = _select_primary_marketplace(valid_candidates)
+
+        best_profit_marketplace = best_by_profit.marketplace_name
+        best_marketplace = primary.marketplace_name
+
+        if recommended_marketplace is None:
+            primary.warnings.append(
+                "No marketplace has enough execution confidence to be recommended automatically; "
+                "verify comps manually before buying."
+            )
+
+        best_by_execution = (
+            next(
+                (c for c in valid_candidates if c.marketplace_name == recommended_marketplace),
+                primary,
+            )
+            if recommended_marketplace
+            else primary
         )
 
         for c in valid_candidates:
@@ -1315,18 +1381,8 @@ async def run_analysis_progressive(
                 c.execution.channel_role = "candidate"
         if best_by_profit.execution:
             best_by_profit.execution.channel_role = "best_profit"
-        if best_by_execution.execution:
+        if recommended_marketplace and best_by_execution.execution:
             best_by_execution.execution.channel_role = "recommended"
-
-        primary = best_by_execution
-        best_profit_marketplace = best_by_profit.marketplace_name
-        recommended_marketplace = best_by_execution.marketplace_name
-        best_marketplace = recommended_marketplace
-        best_marketplace_reason = (
-            "best_profit"
-            if best_profit_marketplace == recommended_marketplace
-            else "best_execution"
-        )
 
         if (
             primary.recommendation == "buy"
@@ -2129,7 +2185,7 @@ def _attach_execution_to_channels(
     channels: list[ChannelBreakdown],
     pipelines: list[_PipelineResult],
     *,
-    recommended_marketplace: str,
+    recommended_marketplace: str | None,
     best_profit_marketplace: str,
 ) -> None:
     """Agrega execution metadata a channels sin reemplazar labels de profit."""

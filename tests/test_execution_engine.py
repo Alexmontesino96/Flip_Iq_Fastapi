@@ -68,3 +68,88 @@ def test_cap_recommendation_only_degrades():
     assert cap_recommendation("buy", "buy_small") == "buy_small"
     assert cap_recommendation("watch", "buy_small") == "watch"
     assert cap_recommendation("pass", "watch") == "pass"
+
+
+def _pipeline(
+    name: str,
+    *,
+    profit: float,
+    expected_profit: float,
+    execution_score: int,
+    confidence_score: int,
+    clean_total: int,
+    recommendation: str,
+):
+    return SimpleNamespace(
+        marketplace_name=name,
+        has_valid_comps=True,
+        profit_market=SimpleNamespace(profit=profit),
+        execution=SimpleNamespace(expected_profit=expected_profit, score=execution_score),
+        confidence=SimpleNamespace(score=confidence_score),
+        cleaned=SimpleNamespace(clean_total=clean_total),
+        recommendation=recommendation,
+    )
+
+
+def test_low_data_profit_channel_does_not_override_actionable_exit():
+    from app.services.analysis_service import _select_primary_marketplace
+
+    amazon = _pipeline(
+        "amazon_fba",
+        profit=75.49,
+        expected_profit=36.34,
+        execution_score=46,
+        confidence_score=11,
+        clean_total=3,
+        recommendation="watch",
+    )
+    ebay = _pipeline(
+        "ebay",
+        profit=36.27,
+        expected_profit=28.29,
+        execution_score=78,
+        confidence_score=58,
+        clean_total=25,
+        recommendation="buy_small",
+    )
+
+    primary, best_profit, recommended_marketplace, reason = _select_primary_marketplace(
+        [amazon, ebay]
+    )
+
+    assert primary.marketplace_name == "ebay"
+    assert best_profit.marketplace_name == "amazon_fba"
+    assert recommended_marketplace == "ebay"
+    assert reason == "best_execution"
+
+
+def test_no_actionable_channel_returns_no_recommendation_badge():
+    from app.services.analysis_service import _select_primary_marketplace
+
+    amazon = _pipeline(
+        "amazon_fba",
+        profit=75.49,
+        expected_profit=36.34,
+        execution_score=46,
+        confidence_score=11,
+        clean_total=3,
+        recommendation="watch",
+    )
+    ebay = _pipeline(
+        "ebay",
+        profit=36.27,
+        expected_profit=28.29,
+        execution_score=44,
+        confidence_score=58,
+        clean_total=25,
+        recommendation="watch",
+    )
+
+    primary, best_profit, recommended_marketplace, reason = _select_primary_marketplace(
+        [amazon, ebay]
+    )
+
+    assert primary.marketplace_name == "amazon_fba"
+    assert best_profit.marketplace_name == "amazon_fba"
+    assert recommended_marketplace is None
+    assert reason == "best_available_untrusted"
