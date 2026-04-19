@@ -8,9 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.limiter import check_analysis_gate, increment_analysis_counter
 from app.core.redis_client import get_redis
+from app.core.security import get_current_user, get_current_user_optional
 from app.database import async_session, get_db
 from app.models.analysis import Analysis
 from app.models.product import Product
+from app.models.user import User
 from app.schemas.analysis import AnalysisRequest, AnalysisResponse, AnalysisHistory
 from app.services.analysis_service import run_analysis, run_analysis_progressive
 
@@ -26,6 +28,7 @@ async def analyze_product(
     payload: AnalysisRequest,
     db: AsyncSession = Depends(get_db),
     redis=Depends(get_redis),
+    user: User | None = Depends(get_current_user_optional),
 ):
     # Soft gate check
     gate = await check_analysis_gate(request, redis, db)
@@ -57,6 +60,7 @@ async def analyze_product(
         condition=payload.condition,
         mode=payload.mode,
         product_type=payload.product_type,
+        user_id=user.id if user else None,
     )
 
     # Increment counter after successful analysis
@@ -75,6 +79,7 @@ async def analyze_product_stream(
     payload: AnalysisRequest,
     db: AsyncSession = Depends(get_db),
     redis=Depends(get_redis),
+    user: User | None = Depends(get_current_user_optional),
 ):
     """SSE endpoint: envía progreso + 2 chunks para respuesta progresiva.
 
@@ -96,6 +101,9 @@ async def analyze_product_stream(
 
     await increment_analysis_counter(request, redis, gate)
 
+    # Capturar user_id ANTES del stream (Depends se cierra cuando el handler retorna)
+    user_id = user.id if user else None
+
     async def event_stream():
         async with async_session() as stream_db:
             try:
@@ -116,6 +124,7 @@ async def analyze_product_stream(
                     condition=payload.condition,
                     mode=payload.mode,
                     product_type=payload.product_type,
+                    user_id=user_id,
                 ):
                     event = chunk["event"]
                     data = chunk["data"]
@@ -147,10 +156,12 @@ async def analyze_product_stream(
 async def get_analysis_history(
     limit: int = 20,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     query = (
         select(Analysis, Product.title)
         .join(Product)
+        .where(Analysis.user_id == user.id)
         .order_by(Analysis.created_at.desc())
         .limit(limit)
     )
@@ -159,6 +170,7 @@ async def get_analysis_history(
     return [
         AnalysisHistory(
             id=a.id,
+            product_id=a.product_id,
             product_title=title,
             cost_price=float(a.cost_price),
             net_profit=float(a.net_profit) if a.net_profit else None,

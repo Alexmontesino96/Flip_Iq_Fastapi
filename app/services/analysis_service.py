@@ -902,6 +902,7 @@ async def run_analysis_progressive(
     condition: str = "any",
     mode: str = "standard",
     product_type: str | None = None,
+    user_id: int | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Genera datos de análisis con progreso SSE y 2 chunks de resultado.
 
@@ -1803,6 +1804,7 @@ async def run_analysis_progressive(
     if product is not None:
         try:
             analysis = Analysis(
+                user_id=user_id,
                 product_id=_product_id,
                 cost_price=cost_price,
                 marketplace=marketplace,
@@ -1892,6 +1894,7 @@ async def run_analysis(
     condition: str = "any",
     mode: str = "standard",
     product_type: str | None = None,
+    user_id: int | None = None,
 ) -> AnalysisResponse:
     """Endpoint sincrono: espera todo y retorna la respuesta completa."""
     result = None
@@ -1902,7 +1905,7 @@ async def run_analysis(
         promo_cost=promo_cost, return_reserve_pct=return_reserve_pct,
         target_profit=target_profit, target_roi=target_roi,
         detailed=detailed, condition=condition, mode=mode,
-        product_type=product_type,
+        product_type=product_type, user_id=user_id,
     ):
         if chunk["event"] == "analysis":
             result = chunk["data"]

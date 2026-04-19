@@ -340,6 +340,7 @@ class ProductSummary(BaseModel):
 
 class AnalysisHistory(BaseModel):
     id: int
+    product_id: int | None = None
     product_title: str
     cost_price: float
     net_profit: float | None

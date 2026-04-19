@@ -3,8 +3,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.security import get_current_user
 from app.database import get_db
 from app.models.product import Product
+from app.models.user import User
 from app.models.watchlist import Watchlist, WatchlistItem
 from app.schemas.watchlist import WatchlistCreate, WatchlistItemAdd, WatchlistItemOut, WatchlistOut
 
@@ -14,9 +16,11 @@ router = APIRouter()
 @router.get("/", response_model=list[WatchlistOut])
 async def list_watchlists(
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     result = await db.execute(
         select(Watchlist)
+        .where(Watchlist.user_id == user.id)
         .options(selectinload(Watchlist.items).selectinload(WatchlistItem.product))
     )
     watchlists = result.scalars().all()
@@ -27,8 +31,9 @@ async def list_watchlists(
 async def create_watchlist(
     payload: WatchlistCreate,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    wl = Watchlist(name=payload.name)
+    wl = Watchlist(name=payload.name, user_id=user.id)
     db.add(wl)
     await db.commit()
     await db.refresh(wl)
@@ -40,8 +45,9 @@ async def add_item(
     watchlist_id: int,
     payload: WatchlistItemAdd,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    wl = await _get_watchlist(db, watchlist_id)
+    wl = await _get_watchlist(db, watchlist_id, user.id)
     product = await db.get(Product, payload.product_id)
     if not product:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
@@ -70,8 +76,9 @@ async def remove_item(
     watchlist_id: int,
     item_id: int,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    await _get_watchlist(db, watchlist_id)
+    await _get_watchlist(db, watchlist_id, user.id)
     item = await db.get(WatchlistItem, item_id)
     if not item or item.watchlist_id != watchlist_id:
         raise HTTPException(status_code=404, detail="Item no encontrado")
@@ -79,9 +86,12 @@ async def remove_item(
     await db.commit()
 
 
-async def _get_watchlist(db: AsyncSession, watchlist_id: int) -> Watchlist:
+async def _get_watchlist(db: AsyncSession, watchlist_id: int, user_id: int) -> Watchlist:
     result = await db.execute(
-        select(Watchlist).where(Watchlist.id == watchlist_id)
+        select(Watchlist).where(
+            Watchlist.id == watchlist_id,
+            Watchlist.user_id == user_id,
+        )
     )
     wl = result.scalar_one_or_none()
     if not wl:
