@@ -13,7 +13,7 @@ alembic==1.14.1
 redis==5.2.1
 
 # Auth (Supabase JWT validation)
-PyJWT>=2.10.1
+PyJWT[crypto]>=2.10.1
 python-multipart==0.0.20
 
 # Rate limiting
