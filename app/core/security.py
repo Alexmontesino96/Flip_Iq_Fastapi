@@ -14,6 +14,40 @@ logger = logging.getLogger(__name__)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
+# JWKS client para tokens ES256 de Supabase (cachea las claves automáticamente)
+_jwks_client: jwt.PyJWKClient | None = None
+
+
+def _get_jwks_client() -> jwt.PyJWKClient:
+    global _jwks_client
+    if _jwks_client is None:
+        jwks_url = f"{settings.supabase_url}/auth/v1/.well-known/jwks.json"
+        _jwks_client = jwt.PyJWKClient(jwks_url, cache_keys=True)
+    return _jwks_client
+
+
+def _decode_token(token: str) -> dict:
+    """Decodifica un JWT de Supabase (soporta HS256 y ES256)."""
+    header = jwt.get_unverified_header(token)
+    alg = header.get("alg", "HS256")
+
+    if alg == "HS256":
+        return jwt.decode(
+            token,
+            settings.supabase_jwt_secret,
+            algorithms=["HS256"],
+            audience="authenticated",
+        )
+
+    # ES256 — obtener clave pública del JWKS de Supabase
+    signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
+    return jwt.decode(
+        token,
+        signing_key.key,
+        algorithms=["ES256"],
+        audience="authenticated",
+    )
+
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
@@ -27,12 +61,7 @@ async def get_current_user(
         )
 
     try:
-        payload = jwt.decode(
-            token,
-            settings.supabase_jwt_secret,
-            algorithms=["HS256"],
-            audience="authenticated",
-        )
+        payload = _decode_token(token)
     except jwt.PyJWTError as e:
         logger.warning("JWT decode failed: %s (token: %s...)", e, token[:30] if token else "")
         raise HTTPException(
