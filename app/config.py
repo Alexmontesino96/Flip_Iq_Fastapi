@@ -43,10 +43,11 @@ class Settings(BaseSettings):
     # Formato: http://user:pass@host:port
     residential_proxy_url: str = ""
 
-    # eBay Browse API (OAuth2 client credentials)
+    # eBay Browse API
     ebay_app_id: str = ""
     ebay_cert_id: str = ""
     ebay_sandbox: bool = False
+    ebay_oauth_token: str = ""  # OAuth User Token (preferred for Browse API)
     # eBay Webhook (marketplace account deletion)
     ebay_verification_token: str = ""
     ebay_webhook_endpoint: str = ""

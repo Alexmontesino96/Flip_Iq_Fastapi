@@ -1,6 +1,5 @@
 """Tests for eBay Browse API client."""
 
-import json
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -59,13 +58,48 @@ def _make_response(status_code: int, json_data: dict) -> httpx.Response:
     return httpx.Response(
         status_code=status_code,
         json=json_data,
-        request=httpx.Request("GET", "https://api.sandbox.ebay.com/test"),
+        request=httpx.Request("GET", "https://api.ebay.com/test"),
     )
 
 
 @pytest.mark.asyncio
 @patch("app.services.marketplace.ebay_browse.settings")
-async def test_search_keywords_returns_suggestions(mock_settings):
+async def test_search_with_oauth_token(mock_settings):
+    """OAuth User Token is used directly — no client_credentials call needed."""
+    mock_settings.ebay_oauth_token = "v^1.1#fake-user-token"
+    mock_settings.ebay_app_id = ""
+    mock_settings.ebay_cert_id = ""
+    mock_settings.ebay_sandbox = False
+
+    search_resp = _make_response(200, FAKE_SEARCH_RESPONSE)
+
+    with patch("httpx.AsyncClient") as MockClient:
+        client_instance = AsyncMock()
+        client_instance.get = AsyncMock(return_value=search_resp)
+        # post should NOT be called (no client_credentials flow)
+        client_instance.post = AsyncMock()
+        MockClient.return_value.__aenter__ = AsyncMock(return_value=client_instance)
+        MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        results = await search_keywords("iphone 14 pro", limit=10)
+
+    assert len(results) == 2
+    assert results[0].title == "Apple iPhone 14 Pro Max 256GB"
+    assert results[0].price == 899.99
+    assert results[0].brand == "Apple"
+    assert results[0].epid == "27060148964"
+    assert results[0].category == "Cell Phones"
+    assert results[1].brand is None
+    assert results[1].category is None
+    # Verify no token refresh call was made
+    client_instance.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("app.services.marketplace.ebay_browse.settings")
+async def test_search_with_client_credentials(mock_settings):
+    """Falls back to client_credentials when no OAuth token."""
+    mock_settings.ebay_oauth_token = ""
     mock_settings.ebay_app_id = "test-app-id"
     mock_settings.ebay_cert_id = "test-cert-id"
     mock_settings.ebay_sandbox = True
@@ -83,18 +117,14 @@ async def test_search_keywords_returns_suggestions(mock_settings):
         results = await search_keywords("iphone 14 pro", limit=10)
 
     assert len(results) == 2
-    assert results[0].title == "Apple iPhone 14 Pro Max 256GB"
-    assert results[0].price == 899.99
-    assert results[0].brand == "Apple"
-    assert results[0].epid == "27060148964"
-    assert results[0].category == "Cell Phones"
-    assert results[1].brand is None
-    assert results[1].category is None
+    # Verify token refresh was called
+    client_instance.post.assert_called_once()
 
 
 @pytest.mark.asyncio
 @patch("app.services.marketplace.ebay_browse.settings")
-async def test_search_keywords_no_credentials(mock_settings):
+async def test_search_no_credentials_at_all(mock_settings):
+    mock_settings.ebay_oauth_token = ""
     mock_settings.ebay_app_id = ""
     mock_settings.ebay_cert_id = ""
 
@@ -104,17 +134,16 @@ async def test_search_keywords_no_credentials(mock_settings):
 
 @pytest.mark.asyncio
 @patch("app.services.marketplace.ebay_browse.settings")
-async def test_search_keywords_empty_results(mock_settings):
-    mock_settings.ebay_app_id = "test-app-id"
-    mock_settings.ebay_cert_id = "test-cert-id"
-    mock_settings.ebay_sandbox = True
+async def test_search_empty_results(mock_settings):
+    mock_settings.ebay_oauth_token = "v^1.1#fake-user-token"
+    mock_settings.ebay_app_id = ""
+    mock_settings.ebay_cert_id = ""
+    mock_settings.ebay_sandbox = False
 
-    token_resp = _make_response(200, FAKE_TOKEN_RESPONSE)
     empty_resp = _make_response(200, {"total": 0})
 
     with patch("httpx.AsyncClient") as MockClient:
         client_instance = AsyncMock()
-        client_instance.post = AsyncMock(return_value=token_resp)
         client_instance.get = AsyncMock(return_value=empty_resp)
         MockClient.return_value.__aenter__ = AsyncMock(return_value=client_instance)
         MockClient.return_value.__aexit__ = AsyncMock(return_value=False)

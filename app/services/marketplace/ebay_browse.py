@@ -1,7 +1,8 @@
 """eBay Browse API client — keyword search for autocomplete suggestions.
 
-Uses OAuth2 Application Access Token (client_credentials grant).
-Token is cached in-memory and refreshed automatically when expired.
+Supports two auth modes:
+1. OAuth User Token (EBAY_OAUTH_TOKEN) — preferred, used directly as Bearer token
+2. Client Credentials (EBAY_APP_ID + EBAY_CERT_ID) — fallback, auto-refreshes Application token
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ logger = logging.getLogger("flipiq.ebay_browse")
 _SANDBOX_BASE = "https://api.sandbox.ebay.com"
 _PRODUCTION_BASE = "https://api.ebay.com"
 
-# Module-level token cache
+# Module-level token cache (only used for client_credentials flow)
 _token_cache: dict[str, object] = {"token": None, "expires_at": 0.0}
 
 
@@ -28,8 +29,16 @@ def _base_url() -> str:
     return _SANDBOX_BASE if settings.ebay_sandbox else _PRODUCTION_BASE
 
 
-async def _get_app_token(client: httpx.AsyncClient) -> str:
-    """Get or refresh OAuth2 Application Access Token."""
+async def _get_token(client: httpx.AsyncClient) -> str:
+    """Get a valid Bearer token.
+
+    Priority: OAuth User Token > client_credentials Application Token.
+    """
+    # 1. Direct OAuth User Token (no refresh needed, expires 2027)
+    if settings.ebay_oauth_token:
+        return settings.ebay_oauth_token
+
+    # 2. Client credentials flow (Application Access Token)
     if _token_cache["token"] and time.time() < _token_cache["expires_at"] - 60:
         return _token_cache["token"]
 
@@ -52,7 +61,7 @@ async def _get_app_token(client: httpx.AsyncClient) -> str:
 
     _token_cache["token"] = data["access_token"]
     _token_cache["expires_at"] = time.time() + data.get("expires_in", 7200)
-    logger.info("eBay OAuth2 token refreshed, expires in %ss", data.get("expires_in"))
+    logger.info("eBay OAuth2 app token refreshed, expires in %ss", data.get("expires_in"))
     return data["access_token"]
 
 
@@ -93,8 +102,11 @@ async def search_keywords(
     category_ids: str | None = None,
 ) -> list[SearchSuggestion]:
     """Search eBay Browse API for active listings matching a keyword."""
-    if not settings.ebay_app_id or not settings.ebay_cert_id:
-        logger.warning("eBay Browse API credentials not configured")
+    has_oauth = bool(settings.ebay_oauth_token)
+    has_client_creds = bool(settings.ebay_app_id and settings.ebay_cert_id)
+
+    if not has_oauth and not has_client_creds:
+        logger.warning("eBay Browse API: no OAuth token or client credentials configured")
         return []
 
     params: dict[str, str] = {
@@ -107,12 +119,13 @@ async def search_keywords(
         params["category_ids"] = category_ids
 
     async with httpx.AsyncClient(timeout=5.0) as client:
-        token = await _get_app_token(client)
+        token = await _get_token(client)
         resp = await _do_search(client, token, params)
 
-        if resp.status_code == 401:
+        if resp.status_code == 401 and not has_oauth:
+            # App token expired — force refresh and retry
             _token_cache["token"] = None
-            token = await _get_app_token(client)
+            token = await _get_token(client)
             resp = await _do_search(client, token, params)
 
         resp.raise_for_status()
