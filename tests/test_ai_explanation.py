@@ -115,6 +115,10 @@ class TestSystemPrompt:
     def test_prompt_requires_decision_to_match_engine(self):
         assert "DECISION value exactly" in SYSTEM_PROMPT
 
+    def test_prompt_requires_spike_risk_in_brief(self):
+        assert "temporary spike" in SYSTEM_PROMPT
+        assert "sales may be concentrated" in SYSTEM_PROMPT
+
 
 class TestDecisionAlignment:
     def test_aligns_yes_limited_to_watch(self):

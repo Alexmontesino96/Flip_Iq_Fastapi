@@ -32,6 +32,7 @@ Important rules:
   Do not upgrade or downgrade that label in the AI text.
 - Do not repeat every metric. Pick the few numbers that change the decision.
 - If confidence is below 40 or comps are fewer than 5, the decision should be NOT YET or NO unless the action clearly says verify manually.
+- If demand trend is extreme (roughly +80% or higher), treat it as a possible temporary spike. The Risk line MUST mention that sales may be concentrated and not sustained.
 - If recommendation is buy_small, use YES (LIMITED), not YES.
 - If execution analysis is provided, lead with execution confidence and quantity guidance, not raw ROI.
 - If marketplace comparison is provided, name the recommended selling channel in the Action line."""
