@@ -1883,6 +1883,7 @@ async def run_analysis_progressive(
                 ai_explanation=ai_explanation,
                 shipping_cost=shipping_cost,
                 prep_cost=prep_cost,
+                no_comps_found=not has_valid_comps,
             )
             db.add(analysis)
             await db.commit()

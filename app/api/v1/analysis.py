@@ -10,10 +10,18 @@ from app.core.limiter import check_analysis_gate, increment_analysis_counter
 from app.core.redis_client import get_redis
 from app.core.security import get_current_user, get_current_user_optional
 from app.database import async_session, get_db
-from app.models.analysis import Analysis
+from app.models.analysis import Analysis, AnalysisFeedback
 from app.models.product import Product
 from app.models.user import User
-from app.schemas.analysis import AnalysisRequest, AnalysisResponse, AnalysisHistory
+from app.schemas.analysis import (
+    AnalysisRequest,
+    AnalysisResponse,
+    AnalysisHistory,
+    FeedbackRequest,
+    FeedbackResponse,
+    FlaggedItem,
+    NotFoundItem,
+)
 from app.services.analysis_service import run_analysis, run_analysis_progressive
 
 logger = logging.getLogger(__name__)
@@ -181,6 +189,124 @@ async def get_analysis_history(
         )
         for a, title in rows
     ]
+
+
+@router.get("/not-found", response_model=list[NotFoundItem])
+async def list_not_found(
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Lista análisis donde no se encontraron comps de mercado."""
+    query = (
+        select(Analysis, Product)
+        .join(Product)
+        .where(Analysis.user_id == user.id, Analysis.no_comps_found.is_(True))
+        .order_by(Analysis.created_at.desc())
+        .limit(limit)
+    )
+    result = await db.execute(query)
+    rows = result.all()
+    engines = None
+    return [
+        NotFoundItem(
+            id=a.id,
+            product_title=p.title,
+            barcode=p.barcode,
+            keyword=(a.engines_data or {}).get("data_quality", {}).get("scraper", {}).get("query_used"),
+            marketplace=a.marketplace,
+            cost_price=float(a.cost_price),
+            created_at=a.created_at,
+        )
+        for a, p in rows
+    ]
+
+
+@router.get("/flagged", response_model=list[FlaggedItem])
+async def list_flagged(
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Lista análisis que el usuario marcó como incorrectos."""
+    query = (
+        select(AnalysisFeedback, Analysis, Product)
+        .join(Analysis, AnalysisFeedback.analysis_id == Analysis.id)
+        .join(Product, Analysis.product_id == Product.id)
+        .where(AnalysisFeedback.user_id == user.id)
+        .order_by(AnalysisFeedback.created_at.desc())
+        .limit(limit)
+    )
+    result = await db.execute(query)
+    rows = result.all()
+    return [
+        FlaggedItem(
+            analysis_id=f.analysis_id,
+            product_title=p.title,
+            marketplace=a.marketplace,
+            recommendation=a.recommendation,
+            flip_score=a.flip_score,
+            net_profit=float(a.net_profit) if a.net_profit else None,
+            feedback_type=f.feedback_type,
+            comment=f.comment,
+            actual_sale_price=float(f.actual_sale_price) if f.actual_sale_price else None,
+            flagged_at=f.created_at,
+        )
+        for f, a, p in rows
+    ]
+
+
+@router.post("/{analysis_id}/feedback", response_model=FeedbackResponse)
+async def submit_feedback(
+    analysis_id: int,
+    payload: FeedbackRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Reporta un análisis como incorrecto o impreciso."""
+    # Verificar que el análisis existe y pertenece al usuario
+    query = select(Analysis).where(
+        Analysis.id == analysis_id,
+        Analysis.user_id == user.id,
+    )
+    result = await db.execute(query)
+    analysis = result.scalar_one_or_none()
+    if analysis is None:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    # Verificar que no haya feedback duplicado del mismo tipo
+    existing = await db.execute(
+        select(AnalysisFeedback).where(
+            AnalysisFeedback.analysis_id == analysis_id,
+            AnalysisFeedback.user_id == user.id,
+            AnalysisFeedback.feedback_type == payload.feedback_type,
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=409,
+            detail=f"Feedback of type '{payload.feedback_type}' already submitted for this analysis",
+        )
+
+    feedback = AnalysisFeedback(
+        analysis_id=analysis_id,
+        user_id=user.id,
+        feedback_type=payload.feedback_type,
+        comment=payload.comment,
+        actual_sale_price=payload.actual_sale_price,
+    )
+    db.add(feedback)
+    await db.commit()
+    await db.refresh(feedback)
+
+    return FeedbackResponse(
+        id=feedback.id,
+        analysis_id=feedback.analysis_id,
+        feedback_type=feedback.feedback_type,
+        comment=feedback.comment,
+        actual_sale_price=float(feedback.actual_sale_price) if feedback.actual_sale_price else None,
+        created_at=feedback.created_at,
+    )
 
 
 @router.get("/{analysis_id}")

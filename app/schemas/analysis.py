@@ -386,3 +386,60 @@ class AnalysisHistory(BaseModel):
     recommendation: str | None
     marketplace: str
     created_at: datetime
+
+
+# --- Feedback & Not Found ---
+
+_VALID_FEEDBACK_TYPES = {"incorrect_price", "incorrect_recommendation", "outdated", "missing_data", "other"}
+
+
+class FeedbackRequest(BaseModel):
+    """Request para reportar un análisis como incorrecto."""
+    feedback_type: str  # incorrect_price|incorrect_recommendation|outdated|missing_data|other
+    comment: str | None = None
+    actual_sale_price: float | None = None  # precio real si el user vendió
+
+    @field_validator("feedback_type")
+    @classmethod
+    def validate_feedback_type(cls, v: str) -> str:
+        if v not in _VALID_FEEDBACK_TYPES:
+            raise ValueError(
+                f"feedback_type must be one of: {', '.join(sorted(_VALID_FEEDBACK_TYPES))}"
+            )
+        return v
+
+
+class FeedbackResponse(BaseModel):
+    id: int
+    analysis_id: int
+    feedback_type: str
+    comment: str | None
+    actual_sale_price: float | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class NotFoundItem(BaseModel):
+    """Análisis donde no se encontraron comps."""
+    id: int
+    product_title: str
+    barcode: str | None
+    keyword: str | None
+    marketplace: str
+    cost_price: float
+    created_at: datetime
+
+
+class FlaggedItem(BaseModel):
+    """Análisis marcado como incorrecto por el usuario."""
+    analysis_id: int
+    product_title: str
+    marketplace: str
+    recommendation: str | None
+    flip_score: int | None
+    net_profit: float | None
+    feedback_type: str
+    comment: str | None
+    actual_sale_price: float | None
+    flagged_at: datetime

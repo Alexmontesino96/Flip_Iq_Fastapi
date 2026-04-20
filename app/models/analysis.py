@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import ForeignKey, String, DateTime, Integer, Numeric, JSON, Text
+from sqlalchemy import Boolean, ForeignKey, String, DateTime, Integer, Numeric, JSON, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -47,9 +47,34 @@ class Analysis(Base):
     shipping_cost: Mapped[float | None] = mapped_column(Numeric(10, 2))
     prep_cost: Mapped[float | None] = mapped_column(Numeric(10, 2))
 
+    # Data quality flags
+    no_comps_found: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
     user = relationship("User", back_populates="analyses")
     product = relationship("Product", back_populates="analyses")
+    feedbacks = relationship("AnalysisFeedback", back_populates="analysis", cascade="all, delete-orphan")
+
+
+class AnalysisFeedback(Base):
+    """Feedback del usuario sobre un análisis (incorrecto, outdated, etc.)."""
+
+    __tablename__ = "analysis_feedbacks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    analysis_id: Mapped[int] = mapped_column(ForeignKey("analyses.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+
+    feedback_type: Mapped[str] = mapped_column(String(30))  # incorrect_price|incorrect_recommendation|outdated|other
+    comment: Mapped[str | None] = mapped_column(Text)
+    actual_sale_price: Mapped[float | None] = mapped_column(Numeric(10, 2))  # precio real si el user vendió
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    analysis = relationship("Analysis", back_populates="feedbacks")
+    user = relationship("User")
