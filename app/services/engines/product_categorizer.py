@@ -1,8 +1,9 @@
-"""Product Categorizer — extrae product_type y ebay_category_id del keyword usando LLM.
+"""Product Categorizer — extrae product_type y ebay_category_id del keyword.
+
+Strategy: eBay Taxonomy API (free, ~100ms) → LLM fallback → None.
 
 Permite filtrar datos contaminantes (e.g. viseras cuando buscas cascos).
 También mapea a una categoría de eBay (_sacat) para mejorar la precisión del scraper.
-Usa Gemini Flash (~100ms) con fallback a OpenAI, y None si no hay LLM.
 """
 
 import json
@@ -10,6 +11,7 @@ import logging
 from dataclasses import dataclass
 
 from app.core.llm import get_llm_client, disable_gemini, is_gemini_error
+from app.services.marketplace.ebay_taxonomy import get_category_suggestions
 
 logger = logging.getLogger(__name__)
 
@@ -67,10 +69,73 @@ class CategoryResult:
 
 
 async def categorize_product(keyword: str) -> CategoryResult | None:
-    """Extrae product_type y ebay_category_id del keyword usando LLM.
+    """Extrae product_type y ebay_category_id del keyword.
 
-    Returns None si no hay LLM configurado o si falla.
+    Strategy:
+    1. eBay Taxonomy API getCategorySuggestions (free, fast, accurate)
+    2. LLM fallback (Gemini Flash → OpenAI)
+    3. None if both fail
     """
+    # --- Strategy 1: eBay Taxonomy API ---
+    result = await _categorize_via_taxonomy(keyword)
+    if result:
+        return result
+
+    # --- Strategy 2: LLM fallback ---
+    return await _categorize_via_llm(keyword)
+
+
+async def _categorize_via_taxonomy(keyword: str) -> CategoryResult | None:
+    """Use eBay's Taxonomy API getCategorySuggestions."""
+    try:
+        suggestions = await get_category_suggestions(keyword)
+    except Exception as e:
+        logger.debug("Taxonomy API unavailable: %s", e)
+        return None
+
+    if not suggestions:
+        return None
+
+    best = suggestions[0]
+
+    # Extract product_type from keyword (last noun-like word)
+    product_type = _extract_product_type(keyword)
+
+    # Build category path string
+    category = best.category_name
+    if best.parent_path:
+        category = f"{best.parent_path[-1]} > {best.category_name}" if len(best.parent_path) > 0 else best.category_name
+
+    return CategoryResult(
+        product_type=product_type,
+        category=category,
+        confidence=0.9 if len(suggestions) == 1 else 0.8,
+        ebay_category_id=best.category_id,
+    )
+
+
+def _extract_product_type(keyword: str) -> str:
+    """Extract the core product noun from a keyword string.
+
+    Simple heuristic: last meaningful word (skip brands/sizes/colors).
+    """
+    # Common words to skip
+    skip = {
+        "new", "used", "sealed", "brand", "lot", "bundle", "set",
+        "black", "white", "blue", "red", "green", "gold", "silver", "pink",
+        "small", "medium", "large", "xl", "xxl", "xs",
+        "pro", "max", "plus", "mini", "ultra", "lite",
+    }
+    words = keyword.lower().split()
+    # Try from the end, find a noun-like word
+    for word in reversed(words):
+        if word not in skip and len(word) > 2 and not word.isdigit():
+            return word
+    return words[-1] if words else keyword.lower()
+
+
+async def _categorize_via_llm(keyword: str) -> CategoryResult | None:
+    """Fallback: use LLM to categorize when Taxonomy API fails."""
     client, model = get_llm_client(fast=True)
     if client is None:
         return None
@@ -123,7 +188,7 @@ async def categorize_product(keyword: str) -> CategoryResult | None:
                 if client is None:
                     return None
                 continue
-            logger.warning("Categorizer failed: %s", e)
+            logger.warning("Categorizer LLM failed: %s", e)
             return None
 
     return None

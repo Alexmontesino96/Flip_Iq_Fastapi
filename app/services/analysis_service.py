@@ -63,6 +63,7 @@ from app.services.engines.market_intelligence import compute_market_intelligence
 from app.services.engines.comp_cleaner import clean_comps
 from app.services.engines.comp_relevance import filter_comps_by_relevance
 from app.services.engines.product_categorizer import categorize_product
+from app.services.category_config import ResolvedConfig, resolve_config, map_to_category_slug
 from app.services.engines.title_enricher import enrich_listings
 from app.services.engines.competition_engine import compute_competition
 from app.services.engines.confidence_engine import compute_confidence
@@ -286,35 +287,51 @@ def _run_pipeline(
     target_roi: float = 0.35,
     enriched: bool = False,
     product_type: str | None = None,
+    config: ResolvedConfig | None = None,
 ) -> _PipelineResult:
     """Ejecuta los motores A-K + decisión sobre un set de comps.
 
     Es síncrono — todos los motores son funciones puras sin I/O.
+    config: ResolvedConfig with category-specific overrides (optional).
     """
+    # Apply config defaults for costs when user didn't provide explicit values
+    if config:
+        if shipping_cost == 0.0 and config.shipping_cost > 0:
+            shipping_cost = config.shipping_cost
+        if packaging_cost == 0.0 and config.packaging_cost > 0:
+            packaging_cost = config.packaging_cost
+        if return_reserve_pct == 0.05 and config.return_reserve_pct != 0.05:
+            return_reserve_pct = config.return_reserve_pct
+
     # Motor A: Limpiar comps
     cleaned = clean_comps(raw_comps, keyword=keyword, condition=condition, product_type=product_type)
 
     # Motor B: Precios recomendados
-    pricing = compute_pricing(cleaned)
+    pricing = compute_pricing(cleaned, config=config)
+
+    # Fee rate from config (category-specific)
+    fee_override = config.fee_rate if config else None
 
     # Motor C: Profit
     profit_market = compute_profit(
         pricing.market_list, cost_price, marketplace_name,
         shipping_cost, packaging_cost, prep_cost, promo_cost, return_reserve_pct,
+        fee_rate_override=fee_override,
     )
     profit_quick = compute_profit(
         pricing.quick_list, cost_price, marketplace_name,
         shipping_cost, packaging_cost, prep_cost, promo_cost, return_reserve_pct,
+        fee_rate_override=fee_override,
     )
 
     # Motor D: Max buy price
     max_buy = compute_max_buy(profit_market, target_profit, target_roi)
 
     # Motor E: Velocity
-    velocity = compute_velocity(cleaned)
+    velocity = compute_velocity(cleaned, config=config)
 
     # Motor F: Risk
-    risk = compute_risk(cleaned, raw_comps)
+    risk = compute_risk(cleaned, raw_comps, config=config)
 
     # Title Risk
     title_risk = compute_title_risk(cleaned, keyword=keyword)
@@ -323,15 +340,15 @@ def _run_pipeline(
     seller = compute_seller_premium(cleaned)
 
     # Motor I: Competition
-    competition = compute_competition(cleaned)
+    competition = compute_competition(cleaned, config=config)
 
     # Motor J: Trend (antes de confidence para pasar burstiness)
-    trend = compute_trend(cleaned)
+    trend = compute_trend(cleaned, config=config)
 
     # Motor G: Confidence (con burstiness del trend)
     confidence = compute_confidence(
         cleaned, raw_comps, enriched, title_risk.risk_score,
-        burstiness=trend.burstiness,
+        burstiness=trend.burstiness, config=config,
     )
 
     # Motor K: Listing Strategy
@@ -347,6 +364,7 @@ def _run_pipeline(
         subset_profit = compute_profit(
             cleaned.condition_subset_median, cost_price, marketplace_name,
             shipping_cost, packaging_cost, prep_cost, promo_cost, return_reserve_pct,
+            fee_rate_override=fee_override,
         )
         subset_max_buy = compute_max_buy(subset_profit, target_profit, target_roi)
         condition_subset_pricing = {
@@ -432,6 +450,7 @@ def _run_pipeline(
         raw_comps=raw_comps,
         distribution_shape=distribution_shape,
         product_type=product_type,
+        config=config,
     )
     capped_recommendation = cap_recommendation(
         recommendation,
@@ -1014,11 +1033,17 @@ async def run_analysis_progressive(
             {"keyword": search_keyword},
         )
         category_result = await categorize_product(search_keyword)
+        category_slug: str | None = None
         if category_result:
             product_type = category_result.product_type
+            # Map eBay category ID to our internal category slug for config
+            try:
+                category_slug = await map_to_category_slug(category_result.ebay_category_id, db)
+            except Exception:
+                category_slug = None
             logger.info(
-                "Categorizado: '%s' → product_type='%s' (confidence=%.2f)",
-                search_keyword, product_type, category_result.confidence,
+                "Categorizado: '%s' → product_type='%s' category_slug='%s' (confidence=%.2f)",
+                search_keyword, product_type, category_slug, category_result.confidence,
             )
         yield _progress(
             "category",
@@ -1200,6 +1225,16 @@ async def run_analysis_progressive(
         {"condition": condition, "cost_price": cost_price},
     )
     kw = search_keyword or barcode or ""
+
+    # Resolve category-specific config (fees, thresholds, shipping defaults)
+    ebay_config: ResolvedConfig | None = None
+    amazon_config: ResolvedConfig | None = None
+    try:
+        ebay_config = await resolve_config(category_slug, channel="ebay", db=db)
+        amazon_config = await resolve_config(category_slug, channel="amazon_fba", db=db)
+    except Exception as e:
+        logger.warning("Category config resolution failed, using global defaults: %s", e)
+
     pipeline_kwargs = dict(
         keyword=kw,
         condition=condition,
@@ -1215,7 +1250,8 @@ async def run_analysis_progressive(
     )
 
     ebay_pipeline = _run_pipeline(
-        ebay_raw, marketplace_name="ebay", enriched=ebay_enriched, **pipeline_kwargs,
+        ebay_raw, marketplace_name="ebay", enriched=ebay_enriched,
+        config=ebay_config, **pipeline_kwargs,
     )
 
     # Si la busqueda UPC devolvio algo bruto pero nada util tras cleanup
@@ -1257,7 +1293,7 @@ async def run_analysis_progressive(
                 )
             ebay_pipeline_kw = _run_pipeline(
                 ebay_raw_kw, marketplace_name="ebay",
-                enriched=ebay_enriched_kw, **pipeline_kwargs,
+                enriched=ebay_enriched_kw, config=ebay_config, **pipeline_kwargs,
             )
             if ebay_pipeline_kw.cleaned.clean_total > ebay_pipeline.cleaned.clean_total:
                 ebay_raw = ebay_raw_kw
@@ -1312,7 +1348,7 @@ async def run_analysis_progressive(
                     )
                 ebay_pipeline2 = _run_pipeline(
                     ebay_raw2, marketplace_name="ebay",
-                    enriched=True, **pipeline_kwargs,
+                    enriched=True, config=ebay_config, **pipeline_kwargs,
                 )
                 if ebay_pipeline2.cleaned.clean_total > ebay_pipeline.cleaned.clean_total:
                     logger.info(
@@ -1327,7 +1363,8 @@ async def run_analysis_progressive(
     amazon_pipeline: _PipelineResult | None = None
     if amazon_raw and amazon_raw.listings:
         amazon_pipeline = _run_pipeline(
-            amazon_raw, marketplace_name="amazon_fba", enriched=False, **pipeline_kwargs,
+            amazon_raw, marketplace_name="amazon_fba", enriched=False,
+            config=amazon_config, **pipeline_kwargs,
         )
 
     logger.info("⏱ PIPELINE+REFETCH: %.1fs (ebay=%d, amazon=%d comps)",
@@ -1665,6 +1702,8 @@ async def run_analysis_progressive(
         market_intelligence=None,
         detected_category=category_result.category if category_result else None,
         category_confidence=category_result.confidence if category_result else None,
+        category_slug=category_slug,
+        observation_mode=ebay_config.observation_mode if ebay_config else False,
         ebay_analysis=ebay_analysis,
         amazon_analysis=amazon_analysis,
         best_marketplace=best_marketplace,

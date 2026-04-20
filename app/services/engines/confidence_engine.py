@@ -27,12 +27,14 @@ def compute_confidence(
     enriched: bool = False,
     title_risk_score: float = 0.0,
     burstiness: float = 0.0,
+    config=None,
 ) -> ConfidenceResult:
     """Calcula score de confianza del análisis.
 
     Args:
         enriched: True si los listings fueron enriquecidos (LLM o detailedSearch).
         title_risk_score: 0-1 del title risk detector. Penaliza confianza.
+        config: ResolvedConfig with category-specific thresholds (optional).
     """
     if cleaned.clean_total == 0:
         return ConfidenceResult(
@@ -41,11 +43,20 @@ def compute_confidence(
             factors={"no_data": 1.0},
         )
 
+    # Category-tunable thresholds
+    sample_size = config.confidence_sample_size if config else 20
+    weights = config.confidence_weights if config else [0.30, 0.25, 0.20, 0.15, 0.10]
+    burst_thresh = config.confidence_burstiness_threshold if config else 0.3
+    burst_mult = config.confidence_burstiness_multiplier if config else 40
+    burst_cap = config.confidence_burstiness_cap if config else 15
+    tr_mult = config.confidence_title_risk_multiplier if config else 20
+    we_penalty_val = config.confidence_window_expansion_penalty if config else 10.0
+
     n_clean = cleaned.clean_total
     raw_total = max(cleaned.raw_total, 1)
 
-    # sample_score: min(1, n_clean / 20)
-    sample_score = min(1.0, n_clean / 20)
+    # sample_score
+    sample_score = min(1.0, n_clean / sample_size)
 
     # consistency_score: 1 - outlier_share
     outlier_share = cleaned.outliers_removed / raw_total
@@ -76,29 +87,28 @@ def compute_confidence(
     enrichment_quality = 1.0 if enriched else 0.0
 
     score = 100 * (
-        0.30 * sample_score
-        + 0.25 * consistency_score
-        + 0.20 * attribute_score
-        + 0.15 * timeline_score
-        + 0.10 * enrichment_quality
+        weights[0] * sample_score
+        + weights[1] * consistency_score
+        + weights[2] * attribute_score
+        + weights[3] * timeline_score
+        + weights[4] * enrichment_quality
     )
 
     # Penalización explícita por expansión temporal:
-    # Los datos de una ventana expandida son menos representativos del mercado actual.
     window_expansion_penalty = 0.0
     if cleaned.temporal_window_expanded:
-        window_expansion_penalty = 10.0
+        window_expansion_penalty = we_penalty_val
         score -= window_expansion_penalty
 
     # Penalizar por title risk (títulos ambiguos contaminan la confianza)
     if title_risk_score > 0:
-        penalty = title_risk_score * 20  # hasta -20 puntos
+        penalty = title_risk_score * tr_mult
         score -= penalty
 
     # Penalizar por burstiness alta (ventas concentradas en pocos días)
     burst_penalty = 0.0
-    if burstiness > 0.3:
-        burst_penalty = min(15, (burstiness - 0.3) * 40)
+    if burstiness > burst_thresh:
+        burst_penalty = min(burst_cap, (burstiness - burst_thresh) * burst_mult)
         score -= burst_penalty
 
     score = min(100, max(0, round(score)))

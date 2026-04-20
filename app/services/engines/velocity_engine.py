@@ -41,7 +41,7 @@ def _format_days_to_sell(spd: float) -> str:
     return f"~{lo}-{hi}d"
 
 
-def compute_velocity(cleaned: CleanedComps) -> VelocityResult:
+def compute_velocity(cleaned: CleanedComps, config=None) -> VelocityResult:
     """Calcula score de velocidad de venta basado en sales_per_day."""
     spd = cleaned.sales_per_day
 
@@ -54,13 +54,21 @@ def compute_velocity(cleaned: CleanedComps) -> VelocityResult:
             estimated_days_to_sell=None,
         )
 
-    score = min(100, round(25 * math.log(1 + 30 * spd)))
+    # Category-tunable thresholds
+    coeff = config.velocity_coefficient if config else 25
+    scaling = config.velocity_scaling if config else 30
+    ceiling = config.velocity_ceiling if config else 100
+    thresh_fast = config.velocity_very_fast if config else 1.0
+    thresh_healthy = config.velocity_healthy if config else 0.5
+    thresh_moderate = config.velocity_moderate if config else 0.1
 
-    if spd >= 1.0:
+    score = min(ceiling, round(coeff * math.log(1 + scaling * spd)))
+
+    if spd >= thresh_fast:
         category = "very_fast"
-    elif spd >= 0.5:
+    elif spd >= thresh_healthy:
         category = "healthy"
-    elif spd >= 0.1:
+    elif spd >= thresh_moderate:
         category = "moderate"
     else:
         category = "slow"

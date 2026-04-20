@@ -18,7 +18,7 @@ class CompetitionResult:
     category: str                  # healthy|moderate|concentrated
 
 
-def compute_competition(cleaned: CleanedComps) -> CompetitionResult:
+def compute_competition(cleaned: CleanedComps, config=None) -> CompetitionResult:
     """Calcula concentración de mercado usando HHI."""
     if cleaned.clean_total == 0:
         return CompetitionResult(
@@ -60,9 +60,12 @@ def compute_competition(cleaned: CleanedComps) -> CompetitionResult:
 
     dominant_share = max(shares)
 
-    if hhi > 0.25:
+    hhi_conc = config.competition_hhi_concentrated if config else 0.25
+    hhi_mod = config.competition_hhi_moderate if config else 0.15
+
+    if hhi > hhi_conc:
         category = "concentrated"
-    elif hhi > 0.15:
+    elif hhi > hhi_mod:
         category = "moderate"
     else:
         category = "healthy"

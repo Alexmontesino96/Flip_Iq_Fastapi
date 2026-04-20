@@ -34,9 +34,10 @@ def compute_profit(
     prep_cost: float = 0.0,
     promo_cost: float = 0.0,
     return_reserve_pct: float = 0.05,
+    fee_rate_override: float | None = None,
 ) -> ProfitResult:
     """Calcula profit neto considerando todos los costos reales."""
-    fee_rate = MARKETPLACE_FEE_RATES.get(marketplace, 0.1325)
+    fee_rate = fee_rate_override if fee_rate_override is not None else MARKETPLACE_FEE_RATES.get(marketplace, 0.1325)
     marketplace_fees = sale_price * fee_rate
     return_reserve = sale_price * return_reserve_pct
 

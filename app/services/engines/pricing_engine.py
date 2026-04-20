@@ -19,7 +19,7 @@ class PricingResult:
     stretch_allowed: bool
 
 
-def compute_pricing(cleaned: CleanedComps) -> PricingResult:
+def compute_pricing(cleaned: CleanedComps, config=None) -> PricingResult:
     """Calcula precios recomendados a partir de comps limpios."""
     if cleaned.clean_total == 0:
         return PricingResult(
@@ -29,19 +29,21 @@ def compute_pricing(cleaned: CleanedComps) -> PricingResult:
             stretch_allowed=False,
         )
 
+    # Category-tunable thresholds
+    min_spread_pct = config.pricing_min_spread if config else 0.10
+    spread_factor = config.pricing_spread_factor if config else 0.30
+    cv_threshold = config.pricing_cv_threshold if config else 0.45
+
     median = cleaned.median_price
     p25 = cleaned.p25
     p75 = cleaned.p75
     iqr = cleaned.iqr
     cv = cleaned.cv
 
-    # Cuando el rango natural es demasiado estrecho, usar 10% de la mediana
-    # para que quick/stretch sean decisiones reales y no solo centavos alrededor
-    # del mercado observado.
-    min_spread = median * 0.10
-    spread = 0.30 * iqr
+    min_spread = median * min_spread_pct
+    spread = spread_factor * iqr
     natural_range_pct = (p75 - p25) / median if median > 0 else 0.0
-    use_min_spread = natural_range_pct < 0.10
+    use_min_spread = natural_range_pct < min_spread_pct
 
     if use_min_spread:
         spread = min_spread
@@ -55,7 +57,7 @@ def compute_pricing(cleaned: CleanedComps) -> PricingResult:
         quick_list = max(p25, median - spread)
         market_list = median
         # stretch_list = min(p75, median + spread) si CV < 0.45, sino = market_list
-        stretch_allowed = cv < 0.45
+        stretch_allowed = cv < cv_threshold
         if stretch_allowed:
             stretch_list = min(p75, median + spread)
         else:

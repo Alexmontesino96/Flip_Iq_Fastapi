@@ -58,6 +58,7 @@ def compute_execution(
     raw_comps: CompsResult,
     distribution_shape: str,
     product_type: str | None = None,
+    config=None,
 ) -> ExecutionResult:
     """Calcula execution score y probabilidad práctica de venta."""
     penalties: list[ExecutionPenalty] = []
@@ -138,12 +139,13 @@ def compute_execution(
 
     # High-ticket/electronics need a larger safety buffer because defects,
     # shipping damage, returns and cash tie-up hurt execution.
+    ht_thresh = config.execution_high_ticket_threshold if config else 300
+    elec_tokens = config.execution_electronics_tokens if config else [
+        "console", "electronics", "phone", "laptop", "tablet", "camera", "gaming"
+    ]
     pt = (product_type or "").lower()
-    high_ticket = profit_market.sale_price >= 300 or profit_market.gross_proceeds >= 300
-    electronics_like = any(
-        token in pt
-        for token in ("console", "electronics", "phone", "laptop", "tablet", "camera", "gaming")
-    )
+    high_ticket = profit_market.sale_price >= ht_thresh or profit_market.gross_proceeds >= ht_thresh
+    electronics_like = any(token in pt for token in elec_tokens)
     if high_ticket and (electronics_like or marketplace_name == "amazon_fba"):
         add("high_ticket_execution", "medium", 7, "High-ticket electronics require stronger execution margin and return buffer.")
 

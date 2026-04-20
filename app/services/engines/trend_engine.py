@@ -21,20 +21,26 @@ class TrendResult:
     category: str            # rising|stable|declining|no_data
 
 
-def _trend_confidence(coverage_ratio: float, recent_count: int, prev_count: int) -> str:
+def _trend_confidence(coverage_ratio: float, recent_count: int, prev_count: int, config=None) -> str:
     """Evalúa qué tan confiable es la tendencia detectada."""
-    # Necesitamos data en ambos periodos y buena cobertura
-    if coverage_ratio >= 0.5 and recent_count >= 5 and prev_count >= 5:
+    hi_cov = config.trend_high_coverage if config else 0.5
+    hi_cnt = config.trend_high_min_count if config else 5
+    med_cov = config.trend_medium_coverage if config else 0.35
+    med_cnt = config.trend_medium_min_count if config else 3
+    lo_cov = config.trend_low_coverage if config else 0.2
+    lo_cnt = config.trend_low_min_count if config else 2
+
+    if coverage_ratio >= hi_cov and recent_count >= hi_cnt and prev_count >= hi_cnt:
         return "high"
-    elif coverage_ratio >= 0.35 and recent_count >= 3 and prev_count >= 3:
+    elif coverage_ratio >= med_cov and recent_count >= med_cnt and prev_count >= med_cnt:
         return "medium"
-    elif coverage_ratio >= 0.2 and (recent_count >= 2 or prev_count >= 2):
+    elif coverage_ratio >= lo_cov and (recent_count >= lo_cnt or prev_count >= lo_cnt):
         return "medium_low"
     else:
         return "low"
 
 
-def compute_trend(cleaned: CleanedComps) -> TrendResult:
+def compute_trend(cleaned: CleanedComps, config=None) -> TrendResult:
     """Compara ventas recientes vs previas para detectar tendencias."""
     if cleaned.clean_total == 0 or not cleaned.listings:
         return TrendResult(
@@ -111,12 +117,13 @@ def compute_trend(cleaned: CleanedComps) -> TrendResult:
     burstiness = max(daily_counts) / total if total > 0 else 0.0
 
     # Confianza del trend
-    confidence = _trend_confidence(coverage_ratio, recent_count, prev_count)
+    confidence = _trend_confidence(coverage_ratio, recent_count, prev_count, config)
 
     # Categoría
-    if demand_trend > 15:
+    demand_delta = config.trend_demand_delta if config else 15
+    if demand_trend > demand_delta:
         category = "rising"
-    elif demand_trend < -15:
+    elif demand_trend < -demand_delta:
         category = "declining"
     else:
         category = "stable"

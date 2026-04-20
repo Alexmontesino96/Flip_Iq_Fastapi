@@ -21,7 +21,7 @@ class RiskResult:
     factors: dict[str, float]
 
 
-def compute_risk(cleaned: CleanedComps, raw: CompsResult) -> RiskResult:
+def compute_risk(cleaned: CleanedComps, raw: CompsResult, config=None) -> RiskResult:
     """Calcula score de riesgo/estabilidad basado en CV y dispersión."""
     if cleaned.clean_total == 0:
         return RiskResult(
@@ -29,6 +29,15 @@ def compute_risk(cleaned: CleanedComps, raw: CompsResult) -> RiskResult:
             category="high",
             factors={"no_data": 1.0},
         )
+
+    # Category-tunable thresholds
+    cv_thresh = config.risk_cv_threshold if config else 0.60
+    disp_thresh = config.risk_dispersion_threshold if config else 0.60
+    w_cv = config.risk_cv_weight if config else 35
+    w_disp = config.risk_dispersion_weight if config else 30
+    w_outlier = config.risk_outlier_weight if config else 20
+    w_sample = config.risk_sample_weight if config else 15
+    sample_cap = config.risk_sample_cap if config else 15
 
     cv = cleaned.cv
     raw_total = max(cleaned.raw_total, 1)
@@ -40,14 +49,14 @@ def compute_risk(cleaned: CleanedComps, raw: CompsResult) -> RiskResult:
     )
 
     outlier_share = cleaned.outliers_removed / raw_total
-    sample_penalty = max(0, (15 - n_clean) / 15)
+    sample_penalty = max(0, (sample_cap - n_clean) / sample_cap)
 
     score = (
         100
-        - 35 * min(1, cv / 0.60)
-        - 30 * min(1, dispersion_ratio / 0.60)
-        - 20 * outlier_share
-        - 15 * sample_penalty
+        - w_cv * min(1, cv / cv_thresh)
+        - w_disp * min(1, dispersion_ratio / disp_thresh)
+        - w_outlier * outlier_share
+        - w_sample * sample_penalty
     )
 
     score = min(100, max(0, round(score)))
@@ -63,9 +72,9 @@ def compute_risk(cleaned: CleanedComps, raw: CompsResult) -> RiskResult:
         score=score,
         category=category,
         factors={
-            "cv_penalty": round(35 * min(1, cv / 0.60), 2),
-            "dispersion_penalty": round(30 * min(1, dispersion_ratio / 0.60), 2),
-            "outlier_penalty": round(20 * outlier_share, 2),
-            "sample_penalty": round(15 * sample_penalty, 2),
+            "cv_penalty": round(w_cv * min(1, cv / cv_thresh), 2),
+            "dispersion_penalty": round(w_disp * min(1, dispersion_ratio / disp_thresh), 2),
+            "outlier_penalty": round(w_outlier * outlier_share, 2),
+            "sample_penalty": round(w_sample * sample_penalty, 2),
         },
     )

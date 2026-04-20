@@ -349,6 +349,8 @@ class AnalysisResponse(BaseModel):
     # Categorización de producto
     detected_category: str | None = None
     category_confidence: float | None = None
+    category_slug: str | None = None
+    observation_mode: bool = False
 
     # Análisis dual: cada marketplace con su pipeline completo
     ebay_analysis: MarketplaceAnalysis | None = None
