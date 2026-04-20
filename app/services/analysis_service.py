@@ -10,6 +10,7 @@ L. AI Explanation → M. Market Intelligence (Premium)
 """
 
 import asyncio
+import math
 import re
 import logging
 import time
@@ -50,6 +51,7 @@ from app.schemas.analysis import (
     RiskOut,
     SalesByDateOut,
     SalePlan,
+    ScoreBreakdown,
     SellerPremiumOut,
     TitleRiskOut,
     TrendOut,
@@ -498,7 +500,7 @@ def _pipeline_to_marketplace_analysis(p: _PipelineResult) -> MarketplaceAnalysis
         marketplace=p.marketplace_name,
         estimated_sale_price=p.estimated_sale,
         net_profit=p.profit_market.profit if v else None,
-        roi_pct=round(p.profit_market.roi * 100, 2) if v else None,
+        roi_pct=round(p.profit_market.roi * 100, 2) if (v and math.isfinite(p.profit_market.roi)) else None,
         margin_pct=round(p.profit_market.margin * 100, 2) if v else None,
         flip_score=p.opportunity if v else None,
         recommendation=p.recommendation,
@@ -1529,6 +1531,39 @@ async def run_analysis_progressive(
     best_max_buy = primary.max_buy.recommended_max if has_valid_comps else 0.0
     headroom = (best_max_buy - cost_price) if has_valid_comps else 0.0
     signal = signal_map.get(primary.recommendation, "neutral")
+
+    # Profit signal: usar el mejor profit real entre channels con datos propios,
+    # para que el hero number coincida con lo que se muestra por canal.
+    if has_valid_comps and channels:
+        real_channels = [ch for ch in channels if not ch.is_estimated]
+        if real_channels:
+            best_channel = max(real_channels, key=lambda ch: ch.profit)
+            summary_profit = best_channel.profit
+            summary_roi = best_channel.roi_pct
+            summary_margin = best_channel.margin_pct
+        else:
+            summary_profit = primary.profit_market.profit
+            _roi = primary.profit_market.roi
+            summary_roi = round(_roi * 100, 2) if math.isfinite(_roi) else 0.0
+            summary_margin = round(primary.profit_market.margin * 100, 2)
+    else:
+        summary_profit = 0.0
+        summary_roi = 0.0
+        summary_margin = 0.0
+
+    scores = ScoreBreakdown(
+        flip_score=primary.opportunity if has_valid_comps else 0,
+        velocity=primary.velocity.score if has_valid_comps else 0,
+        risk=primary.risk.score if has_valid_comps else 0,
+        risk_label=primary.risk.category,
+        confidence=primary.confidence.score if has_valid_comps else 0,
+        confidence_label=primary.confidence.category,
+        temporal_window_expanded=primary.cleaned.temporal_window_expanded,
+        execution_score=primary.execution.score if primary.execution else None,
+        win_probability=primary.execution.win_probability if primary.execution else None,
+        final_score=final_score,
+    ) if has_valid_comps else None
+
     summary = AnalysisSummary(
         recommendation=primary.recommendation,
         signal=signal,
@@ -1543,13 +1578,14 @@ async def run_analysis_progressive(
             stretch_price=(primary.pricing.stretch_list if primary.pricing.stretch_allowed else None) if has_valid_comps else None,
         ),
         returns=Returns(
-            profit=primary.profit_market.profit if has_valid_comps else 0.0,
-            roi_pct=round(primary.profit_market.roi * 100, 2) if has_valid_comps else 0.0,
-            margin_pct=round(primary.profit_market.margin * 100, 2) if has_valid_comps else 0.0,
+            profit=summary_profit,
+            roi_pct=summary_roi,
+            margin_pct=summary_margin,
         ),
         risk=primary.risk.category,
         confidence=primary.confidence.category,
         warnings=[],
+        scores=scores,
     )
 
     # Marketplace analyses
@@ -1587,9 +1623,10 @@ async def run_analysis_progressive(
             ),
         )
 
-    top_net_profit = primary.profit_market.profit if has_valid_comps else None
-    top_margin = round(primary.profit_market.margin * 100, 2) if has_valid_comps else None
-    top_roi = round(primary.profit_market.roi * 100, 2) if has_valid_comps else None
+    # Top-level fields: consistentes con el summary profit signal
+    top_net_profit = summary_profit if has_valid_comps else None
+    top_margin = summary_margin if has_valid_comps else None
+    top_roi = summary_roi if has_valid_comps else None
 
     # -----------------------------------------------------------------------
     # YIELD 1: Respuesta parcial (sin AI explanation)
@@ -1720,6 +1757,22 @@ async def run_analysis_progressive(
 
     # Rebuild summary con valores finales
     signal = signal_map.get(recommendation, "neutral")
+    # Actualizar scores con risk post-intelligence
+    final_scores = None
+    if scores is not None:
+        final_scores = ScoreBreakdown(
+            flip_score=opportunity,
+            velocity=scores.velocity,
+            risk=risk.score,
+            risk_label=risk.category,
+            confidence=scores.confidence,
+            confidence_label=scores.confidence_label,
+            temporal_window_expanded=scores.temporal_window_expanded,
+            execution_score=scores.execution_score,
+            win_probability=scores.win_probability,
+            final_score=scores.final_score,
+        )
+
     final_summary = AnalysisSummary(
         recommendation=recommendation,
         signal=signal,
@@ -1729,6 +1782,7 @@ async def run_analysis_progressive(
         risk=risk.category,
         confidence=primary.confidence.category,
         warnings=warnings,
+        scores=final_scores,
     )
 
     # Market intelligence output
@@ -1788,6 +1842,8 @@ async def run_analysis_progressive(
             "p25": primary.cleaned.p25,
             "p75": primary.cleaned.p75,
             "days_of_data": primary.cleaned.days_of_data,
+            "temporal_window_expanded": primary.cleaned.temporal_window_expanded,
+            "initial_days_requested": primary.cleaned.initial_days_requested,
         },
         "data_quality": {
             "pricing_basis": primary.cleaned.pricing_basis,
@@ -2056,6 +2112,8 @@ def _build_comps_info(
                 min_price=s.min_price, max_price=s.max_price,
             ) for s in sales_timeline
         ],
+        temporal_window_expanded=cleaned.temporal_window_expanded,
+        initial_days_requested=cleaned.initial_days_requested if cleaned.temporal_window_expanded else None,
     ), distribution_shape
 
 

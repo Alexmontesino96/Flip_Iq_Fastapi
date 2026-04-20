@@ -47,7 +47,10 @@ def compute_profit(
     profit = risk_adjusted_net - cost_price - prep_cost
 
     total_invested = cost_price + prep_cost
-    roi = profit / total_invested if total_invested > 0 else 0.0
+    if total_invested <= 0:
+        roi = float("inf") if profit > 0 else (float("-inf") if profit < 0 else 0.0)
+    else:
+        roi = profit / total_invested
     margin = profit / sale_price if sale_price > 0 else 0.0
 
     return ProfitResult(

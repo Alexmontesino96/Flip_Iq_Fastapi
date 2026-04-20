@@ -189,20 +189,46 @@ async def generate_explanation(
         if comparison_text:
             user_msg += comparison_text
 
+        # Tokens dinámicos: más input context → más tokens de salida necesarios.
+        # Base 300 (4 líneas ~110 palabras) + extra si hay comparación/ejecución.
+        base_tokens = 300
+        if comparison_text:
+            base_tokens += 200  # Comparación dual necesita más contexto en respuesta
+        max_tokens = min(1200, base_tokens)
+
         response = await client.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_msg},
             ],
-            max_tokens=700,
+            max_tokens=max_tokens,
             temperature=0.3,
-            timeout=25,
+            timeout=30,
         )
 
         text = response.choices[0].message.content
         if response.choices[0].finish_reason == "length":
-            logger.warning("AI explanation truncated (hit max_tokens)")
+            logger.warning(
+                "AI explanation truncated (hit %d max_tokens, input %d chars). "
+                "Retrying with higher limit.",
+                max_tokens, len(user_msg),
+            )
+            # Reintentar con límite mayor
+            retry_response = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg},
+                ],
+                max_tokens=1200,
+                temperature=0.3,
+                timeout=30,
+            )
+            text = retry_response.choices[0].message.content
+            if retry_response.choices[0].finish_reason == "length":
+                logger.error("AI explanation still truncated after retry (1200 tokens)")
+
         return _align_decision_line(_strip_markdown(text), recommendation)
 
     except Exception as e:
@@ -219,13 +245,13 @@ async def generate_explanation(
                             {"role": "system", "content": SYSTEM_PROMPT},
                             {"role": "user", "content": user_msg},
                         ],
-                        max_tokens=700,
+                        max_tokens=max_tokens,
                         temperature=0.3,
-                        timeout=25,
+                        timeout=30,
                     )
                     text = response.choices[0].message.content
                     if response.choices[0].finish_reason == "length":
-                        logger.warning("AI explanation truncated on fallback (hit max_tokens)")
+                        logger.warning("AI explanation truncated on fallback (hit %d max_tokens)", max_tokens)
                     return _align_decision_line(_strip_markdown(text), recommendation)
                 except Exception as e2:
                     logger.warning("OpenAI fallback also failed: %s", e2)

@@ -60,12 +60,16 @@ def compute_confidence(
         attribute_score = with_attrs / len(cleaned.listings)
 
     # timeline_score: días con ventas / lookback_days
+    # Usar initial_days_requested como base (no la ventana expandida)
+    # para evitar penalizar artificialmente cuando se expande 30→90 días.
     days_with_sales = len(set(
         l.ended_at.strftime("%Y-%m-%d")
         for l in cleaned.listings
         if l.ended_at
     ))
-    timeline_score = days_with_sales / max(cleaned.days_of_data, 1)
+    timeline_base_days = cleaned.initial_days_requested if cleaned.temporal_window_expanded else cleaned.days_of_data
+    timeline_score = days_with_sales / max(timeline_base_days, 1)
+    timeline_score = min(1.0, timeline_score)  # Cap a 1.0
 
     # enrichment_quality: reemplaza detailed_flag
     # 1.0 si los datos fueron enriquecidos (LLM o detailed), 0.0 si raw
@@ -78,6 +82,13 @@ def compute_confidence(
         + 0.15 * timeline_score
         + 0.10 * enrichment_quality
     )
+
+    # Penalización explícita por expansión temporal:
+    # Los datos de una ventana expandida son menos representativos del mercado actual.
+    window_expansion_penalty = 0.0
+    if cleaned.temporal_window_expanded:
+        window_expansion_penalty = 10.0
+        score -= window_expansion_penalty
 
     # Penalizar por title risk (títulos ambiguos contaminan la confianza)
     if title_risk_score > 0:
@@ -113,5 +124,6 @@ def compute_confidence(
             "enrichment": enrichment_quality,
             "title_risk_penalty": round(title_risk_score * 20, 2),
             "burstiness_penalty": round(burst_penalty, 2),
+            "window_expansion_penalty": round(window_expansion_penalty, 2),
         },
     )

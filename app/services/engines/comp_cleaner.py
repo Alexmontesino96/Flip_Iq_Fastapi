@@ -610,4 +610,6 @@ def clean_comps(
             relevance_removed=relevance_filtered,
             clean_count=len(clean),
         ),
+        temporal_window_expanded=effective_days != initial_days,
+        initial_days_requested=initial_days,
     )

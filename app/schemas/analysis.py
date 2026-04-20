@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class AnalysisRequest(BaseModel):
@@ -8,6 +8,16 @@ class AnalysisRequest(BaseModel):
     barcode: str | None = None
     keyword: str | None = None
     cost_price: float
+
+    @field_validator("cost_price")
+    @classmethod
+    def cost_price_must_be_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(
+                "cost_price must be greater than 0. "
+                "Enter the actual product cost to get accurate ROI and profit calculations."
+            )
+        return v
     marketplace: str = "ebay"  # ebay|amazon_fba
     # Costos opcionales del revendedor
     shipping_cost: float = 0.0
@@ -70,6 +80,8 @@ class CompsInfo(BaseModel):
     distribution_shape: str = "unknown"  # normal|bimodal|skewed|insufficient
     price_distribution: list[PriceBucketOut] = []
     sales_timeline: list[SalesByDateOut] = []
+    temporal_window_expanded: bool = False  # True si ventana se expandió (ej. 30→90 días)
+    initial_days_requested: float | None = None  # Días originales pedidos antes de expansión
 
 
 # --- Sub-schemas de los motores ---
@@ -259,6 +271,31 @@ class Returns(BaseModel):
     margin_pct: float
 
 
+class ScoreBreakdown(BaseModel):
+    """Scores organizados por categoría para jerarquía visual en el frontend.
+
+    Nivel 1 (hero): flip_score — oportunidad general (0-100)
+    Nivel 2 (market): velocity, risk — salud del mercado
+    Nivel 3 (data_quality): confidence — fiabilidad del análisis
+    Nivel 4 (execution): execution_score, win_probability — viabilidad de venta
+    """
+    # Hero score
+    flip_score: int                    # Opportunity score (0-100)
+    # Market health
+    velocity: int                      # Velocidad de venta (0-100)
+    risk: int                          # Estabilidad del mercado (0-100, alto = estable)
+    risk_label: str = "low"            # low|medium|high
+    # Data quality
+    confidence: int                    # Fiabilidad del análisis (0-100)
+    confidence_label: str = "low"      # low|medium|medium_high|high
+    temporal_window_expanded: bool = False  # True si se expandió la ventana temporal
+    # Execution
+    execution_score: int | None = None       # Viabilidad de ejecución (0-100)
+    win_probability: float | None = None     # Probabilidad de venta (0-1)
+    # Composite
+    final_score: int | None = None           # market × execution (0-100)
+
+
 class AnalysisSummary(BaseModel):
     """Bloque resumen para decisión rápida del revendedor."""
     recommendation: str          # buy|buy_small|watch|pass
@@ -269,6 +306,7 @@ class AnalysisSummary(BaseModel):
     risk: str                    # low|medium|high
     confidence: str              # high|medium_high|medium|low
     warnings: list[str] = []     # alertas del validador
+    scores: ScoreBreakdown | None = None  # Scores organizados por categoría
 
 
 class AICompleteEvent(BaseModel):

@@ -221,6 +221,9 @@ class CleanedComps:
     pricing_basis: str = "no_data"
     data_quality_warnings: list[str] = field(default_factory=list)
     filter_counts: dict[str, int] = field(default_factory=dict)
+    # Ventana temporal: True si se expandió de 30 a 90 días por falta de comps
+    temporal_window_expanded: bool = False
+    initial_days_requested: float = 30
 
 
 class MarketplaceClient(ABC):
