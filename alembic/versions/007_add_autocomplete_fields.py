@@ -1,4 +1,4 @@
-"""Add autocomplete fields to products: normalized_title, trigram index, popularity signals
+"""Add autocomplete fields to products: normalized_title, indexes, popularity signals
 
 Revision ID: 007
 Revises: 006
@@ -17,9 +17,6 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Enable pg_trgm extension for trigram matching
-    op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
-
     # New columns on products
     op.add_column("products", sa.Column("ebay_epid", sa.String(20), nullable=True))
     op.add_column("products", sa.Column("normalized_title", sa.Text(), nullable=True))
@@ -40,24 +37,32 @@ def upgrade() -> None:
         WHERE normalized_title IS NULL
     """)
 
-    # Trigram GIN index for fuzzy autocomplete
-    op.execute("""
-        CREATE INDEX idx_products_normalized_trgm
-        ON products USING GIN (normalized_title gin_trgm_ops)
-    """)
-
-    # B-tree prefix index for "starts with" queries (faster than trgm for prefix)
+    # B-tree prefix index for "starts with" queries
     op.execute("""
         CREATE INDEX idx_products_normalized_prefix
         ON products (normalized_title text_pattern_ops)
     """)
 
+    # ILIKE index for "contains" queries
+    op.create_index("idx_products_normalized_title", "products", ["normalized_title"])
+
     # Popularity index for ranking
-    op.create_index("idx_products_search_count", "products", ["search_count"], postgresql_ops={"search_count": "DESC"})
+    op.create_index("idx_products_search_count", "products", ["search_count"])
+
+    # Try to enable pg_trgm (may fail on managed Postgres like Supabase)
+    try:
+        op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        op.execute("""
+            CREATE INDEX idx_products_normalized_trgm
+            ON products USING GIN (normalized_title gin_trgm_ops)
+        """)
+    except Exception:
+        pass  # trigram not available, ILIKE fallback works fine
 
 
 def downgrade() -> None:
     op.drop_index("idx_products_search_count", table_name="products")
+    op.drop_index("idx_products_normalized_title", table_name="products")
     op.execute("DROP INDEX IF EXISTS idx_products_normalized_prefix")
     op.execute("DROP INDEX IF EXISTS idx_products_normalized_trgm")
 

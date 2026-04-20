@@ -38,7 +38,7 @@ async def suggest(
     """
     normalized_q = normalize_title(q)
 
-    # 1. Local DB query: prefix + trigram + popularity ranking
+    # 1. Local DB query: prefix + ILIKE + popularity ranking
     local_results = await db.execute(
         text("""
             SELECT
@@ -48,16 +48,13 @@ async def suggest(
                     WHEN normalized_title LIKE :prefix THEN 3
                     WHEN normalized_title LIKE :contains THEN 2
                     ELSE 1
-                END AS match_rank,
-                similarity(normalized_title, :q) AS sim
+                END AS match_rank
             FROM products
-            WHERE normalized_title %% :q
-               OR normalized_title LIKE :contains
-            ORDER BY match_rank DESC, sim DESC, search_count DESC
+            WHERE normalized_title LIKE :contains
+            ORDER BY match_rank DESC, search_count DESC
             LIMIT :limit
         """),
         {
-            "q": normalized_q,
             "prefix": f"{normalized_q}%",
             "contains": f"%{normalized_q}%",
             "limit": limit,
