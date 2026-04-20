@@ -43,10 +43,13 @@ class Settings(BaseSettings):
     # Formato: http://user:pass@host:port
     residential_proxy_url: str = ""
 
-    # eBay (legacy — no se usan)
+    # eBay Browse API (OAuth2 client credentials)
     ebay_app_id: str = ""
     ebay_cert_id: str = ""
-    ebay_sandbox: bool = True
+    ebay_sandbox: bool = False
+    # eBay Webhook (marketplace account deletion)
+    ebay_verification_token: str = ""
+    ebay_webhook_endpoint: str = ""
 
     # Amazon SP-API
     amazon_refresh_token: str = ""
