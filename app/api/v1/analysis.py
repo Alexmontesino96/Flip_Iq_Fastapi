@@ -214,18 +214,20 @@ async def get_analysis_detail(
         cost = float(a.cost_price)
         net = float(a.net_profit) if a.net_profit else 0
         sale = float(a.estimated_sale_price) if a.estimated_sale_price else 0
+        max_buy_price = max_buy.get("recommended_max", 0)
+        stretch = pricing.get("stretch_list") if pricing.get("stretch_allowed", False) else None
         summary = {
             "recommendation": a.recommendation or "pass",
             "signal": "positive" if a.recommendation in ("buy", "buy_small") else "neutral",
             "buy_box": {
-                "recommended_max_buy": max_buy.get("max_buy_price", 0),
+                "recommended_max_buy": max_buy_price,
                 "your_cost": cost,
-                "headroom": max_buy.get("max_buy_price", 0) - cost,
+                "headroom": max_buy_price - cost,
             },
             "sale_plan": {
-                "recommended_list_price": pricing.get("recommended_price", sale),
-                "quick_sale_price": pricing.get("quick_price", 0),
-                "stretch_price": pricing.get("stretch_price"),
+                "recommended_list_price": pricing.get("market_list", sale),
+                "quick_sale_price": pricing.get("quick_list", 0),
+                "stretch_price": stretch,
             },
             "returns": {
                 "profit": net,
@@ -245,11 +247,11 @@ async def get_analysis_detail(
             "marketplace": "ebay",
             "comps": {
                 "total_sold": cleaned.get("clean_total", 0),
-                "median_price": pricing.get("median_price", 0),
-                "p25": pricing.get("p25", 0),
-                "p75": pricing.get("p75", 0),
+                "median_price": cleaned.get("median_price", 0),
+                "p25": cleaned.get("p25", 0),
+                "p75": cleaned.get("p75", 0),
                 "sales_per_day": velocity.get("sales_per_day", 0),
-                "days_of_data": velocity.get("days_of_data", 0),
+                "days_of_data": cleaned.get("days_of_data", 0),
             },
             "velocity": {
                 "score": velocity.get("score"),

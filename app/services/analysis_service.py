@@ -1784,6 +1784,10 @@ async def run_analysis_progressive(
             "outliers_removed": primary.cleaned.outliers_removed,
             "relevance_filtered": primary.cleaned.relevance_filtered,
             "cv": primary.cleaned.cv,
+            "median_price": primary.cleaned.median_price,
+            "p25": primary.cleaned.p25,
+            "p75": primary.cleaned.p75,
+            "days_of_data": primary.cleaned.days_of_data,
         },
         "data_quality": {
             "pricing_basis": primary.cleaned.pricing_basis,
