@@ -298,24 +298,47 @@ class TestConditionFiltering:
 
 
 class TestTemporalFiltering:
-    def test_filters_old_listings(self):
-        """Listings fuera de la ventana temporal se filtran."""
+    def test_filters_old_listings_enough_comps(self):
+        """Con >= 5 comps en ventana inicial, no se expande."""
         now = datetime.now(timezone.utc)
         listings = [
-            # 3 dentro de la ventana (últimos 30 días)
+            # 6 dentro de la ventana (últimos 30 días)
+            _make_listing(50.0, ended_at=now - timedelta(days=5)),
+            _make_listing(52.0, ended_at=now - timedelta(days=10)),
+            _make_listing(48.0, ended_at=now - timedelta(days=15)),
+            _make_listing(51.0, ended_at=now - timedelta(days=18)),
+            _make_listing(49.0, ended_at=now - timedelta(days=22)),
+            _make_listing(53.0, ended_at=now - timedelta(days=28)),
+            # 2 fuera de la ventana (> 30 días)
+            _make_listing(55.0, ended_at=now - timedelta(days=60)),
+            _make_listing(45.0, ended_at=now - timedelta(days=120)),
+        ]
+        raw = CompsResult(listings=listings, days_of_data=30, total_sold=8)
+        result = clean_comps(raw)
+        assert result.clean_total == 6
+        assert result.filter_counts["raw"] == 8
+        assert result.filter_counts["temporal"] == 6
+        assert result.filter_counts["clean"] == 6
+        assert result.days_of_data == 30
+
+    def test_adaptive_window_expands_when_few_comps(self):
+        """Con < 5 comps en 30 días, expande a 90 días."""
+        now = datetime.now(timezone.utc)
+        listings = [
+            # 3 dentro de 30 días
             _make_listing(50.0, ended_at=now - timedelta(days=5)),
             _make_listing(52.0, ended_at=now - timedelta(days=10)),
             _make_listing(48.0, ended_at=now - timedelta(days=20)),
-            # 2 fuera de la ventana (> 30 días)
+            # 1 entre 30-90 días (se recupera con expansión)
             _make_listing(55.0, ended_at=now - timedelta(days=60)),
-            _make_listing(45.0, ended_at=now - timedelta(days=90)),
+            # 1 fuera de 90 días (se filtra siempre)
+            _make_listing(45.0, ended_at=now - timedelta(days=120)),
         ]
         raw = CompsResult(listings=listings, days_of_data=30, total_sold=5)
         result = clean_comps(raw)
-        assert result.clean_total == 3
-        assert result.filter_counts["raw"] == 5
-        assert result.filter_counts["temporal"] == 3
-        assert result.filter_counts["clean"] == 3
+        assert result.clean_total == 4
+        assert result.days_of_data == 90
+        assert any("expanded" in w.lower() for w in result.data_quality_warnings)
 
     def test_keeps_listings_without_ended_at(self):
         """Listings sin ended_at no se penalizan."""
@@ -329,12 +352,24 @@ class TestTemporalFiltering:
         result = clean_comps(raw)
         assert result.clean_total == 3
 
-    def test_all_old_listings_returns_empty(self):
-        """Si todos los listings son viejos, retorna vacío."""
+    def test_all_old_listings_adaptive_recovers(self):
+        """Si todos están fuera de 30 días pero dentro de 90, se expande."""
         now = datetime.now(timezone.utc)
         listings = [
-            _make_listing(50.0, ended_at=now - timedelta(days=60)),
-            _make_listing(52.0, ended_at=now - timedelta(days=90)),
+            _make_listing(50.0, ended_at=now - timedelta(days=45)),
+            _make_listing(52.0, ended_at=now - timedelta(days=60)),
+        ]
+        raw = CompsResult(listings=listings, days_of_data=30, total_sold=2)
+        result = clean_comps(raw)
+        assert result.clean_total == 2
+        assert result.days_of_data == 90
+
+    def test_all_old_listings_beyond_90_returns_empty(self):
+        """Si todos los listings son > 90 días, retorna vacío."""
+        now = datetime.now(timezone.utc)
+        listings = [
+            _make_listing(50.0, ended_at=now - timedelta(days=100)),
+            _make_listing(52.0, ended_at=now - timedelta(days=120)),
         ]
         raw = CompsResult(listings=listings, days_of_data=30, total_sold=2)
         result = clean_comps(raw)

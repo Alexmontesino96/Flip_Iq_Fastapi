@@ -336,26 +336,46 @@ def clean_comps(
 
     raw_total = len(raw.listings)
 
-    # 0. Filtrar por ventana temporal
+    # 0. Filtrar por ventana temporal (adaptativa: 30 → 90 días si < 5 comps)
+    _MIN_COMPS_ADAPTIVE = 5
+    _EXPANDED_DAYS = 90
+
     now_utc = datetime.now(timezone.utc)
-    cutoff_aware = now_utc - timedelta(days=raw.days_of_data)
-    cutoff_naive = cutoff_aware.replace(tzinfo=None)
-    temporal_filtered = []
-    for listing in raw.listings:
-        if listing.ended_at is not None:
-            # Comparar respetando si el datetime es aware o naive
-            if listing.ended_at.tzinfo is not None:
-                if listing.ended_at < cutoff_aware:
-                    continue
-            else:
-                if listing.ended_at < cutoff_naive:
-                    continue
-        temporal_filtered.append(listing)
+    initial_days = raw.days_of_data
+    effective_days = initial_days
+
+    def _temporal_filter(days: float) -> list:
+        cutoff_aware = now_utc - timedelta(days=days)
+        cutoff_naive = cutoff_aware.replace(tzinfo=None)
+        filtered = []
+        for listing in raw.listings:
+            if listing.ended_at is not None:
+                if listing.ended_at.tzinfo is not None:
+                    if listing.ended_at < cutoff_aware:
+                        continue
+                else:
+                    if listing.ended_at < cutoff_naive:
+                        continue
+            filtered.append(listing)
+        return filtered
+
+    temporal_filtered = _temporal_filter(initial_days)
+
+    # Ventana adaptativa: si hay pocos comps, ampliar a 90 días
+    if len(temporal_filtered) < _MIN_COMPS_ADAPTIVE and initial_days < _EXPANDED_DAYS:
+        expanded = _temporal_filter(_EXPANDED_DAYS)
+        if len(expanded) > len(temporal_filtered):
+            temporal_filtered = expanded
+            effective_days = _EXPANDED_DAYS
+            data_quality_warnings.append(
+                f"Temporal window expanded from {int(initial_days)} to {_EXPANDED_DAYS} days "
+                f"due to low comp count ({len(_temporal_filter(initial_days))} < {_MIN_COMPS_ADAPTIVE})."
+            )
 
     if not temporal_filtered:
         return CleanedComps(
             raw_total=raw_total,
-            days_of_data=raw.days_of_data,
+            days_of_data=effective_days,
             requested_condition=condition,
             condition_match_rate=no_match_rate,
             pricing_basis="no_data",
@@ -374,7 +394,7 @@ def clean_comps(
     if not priced:
         return CleanedComps(
             raw_total=raw_total,
-            days_of_data=raw.days_of_data,
+            days_of_data=effective_days,
             requested_condition=condition,
             condition_match_rate=no_match_rate,
             pricing_basis="no_data",
@@ -512,7 +532,7 @@ def clean_comps(
             outliers_removed=outliers_removed,
             relevance_filtered=relevance_filtered,
             condition_filtered=condition_filtered,
-            days_of_data=raw.days_of_data,
+            days_of_data=effective_days,
             requested_condition=condition,
             condition_counts=dict(all_conditions),
             condition_match_rate=no_match_rate,
@@ -537,7 +557,7 @@ def clean_comps(
     clean_prices = [l.total_price for l in clean]
     stats = _compute_stats(clean_prices)
 
-    sales_per_day = len(clean) / max(raw.days_of_data, 1)
+    sales_per_day = len(clean) / max(effective_days, 1)
 
     # Condition match rate: % de comps finales que coinciden con condition solicitada
     if condition != "any":
@@ -569,7 +589,7 @@ def clean_comps(
         min_price=stats["min"],
         max_price=stats["max"],
         sales_per_day=round(sales_per_day, 4),
-        days_of_data=raw.days_of_data,
+        days_of_data=effective_days,
         requested_condition=condition,
         condition_counts=dict(final_conditions),
         condition_match_rate=round(match_rate, 4),
