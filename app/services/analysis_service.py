@@ -1901,39 +1901,53 @@ async def run_analysis_progressive(
 
     analysis_id = None
     if product is not None:
+        analysis_kwargs = dict(
+            user_id=user_id,
+            product_id=_product_id,
+            cost_price=cost_price,
+            marketplace=marketplace,
+            estimated_sale_price=estimated_sale,
+            net_profit=top_net_profit,
+            margin_pct=top_margin,
+            roi_pct=top_roi,
+            flip_score=opportunity if has_valid_comps else None,
+            risk_score=risk.score if has_valid_comps else None,
+            velocity_score=primary.velocity.score if has_valid_comps else None,
+            confidence_score=primary.confidence.score,
+            opportunity_score=opportunity,
+            recommendation=recommendation,
+            channels=[c.model_dump() for c in channels] if channels else None,
+            engines_data=engines_data,
+            ai_explanation=ai_explanation,
+            shipping_cost=shipping_cost,
+            prep_cost=prep_cost,
+            no_comps_found=not has_valid_comps,
+        )
+        # Attempt 1: use the existing session
         try:
-            analysis = Analysis(
-                user_id=user_id,
-                product_id=_product_id,
-                cost_price=cost_price,
-                marketplace=marketplace,
-                estimated_sale_price=estimated_sale,
-                net_profit=top_net_profit,
-                margin_pct=top_margin,
-                roi_pct=top_roi,
-                flip_score=opportunity if has_valid_comps else None,
-                risk_score=risk.score if has_valid_comps else None,
-                velocity_score=primary.velocity.score if has_valid_comps else None,
-                confidence_score=primary.confidence.score,
-                opportunity_score=opportunity,
-                recommendation=recommendation,
-                channels=[c.model_dump() for c in channels] if channels else None,
-                engines_data=engines_data,
-                ai_explanation=ai_explanation,
-                shipping_cost=shipping_cost,
-                prep_cost=prep_cost,
-                no_comps_found=not has_valid_comps,
-            )
+            analysis = Analysis(**analysis_kwargs)
             db.add(analysis)
             await db.commit()
             await db.refresh(analysis)
             analysis_id = analysis.id
         except Exception as e:
-            logger.warning("DB persist failed, returning result without ID: %s", e)
+            logger.warning("DB persist failed (attempt 1): %s", e)
             try:
                 await db.rollback()
             except Exception:
                 pass
+            # Attempt 2: fresh session (pooler may have dropped the connection)
+            try:
+                from app.database import async_session as _session_factory
+                async with _session_factory() as fresh_db:
+                    analysis = Analysis(**analysis_kwargs)
+                    fresh_db.add(analysis)
+                    await fresh_db.commit()
+                    await fresh_db.refresh(analysis)
+                    analysis_id = analysis.id
+                    logger.info("DB persist succeeded on retry (id=%s)", analysis_id)
+            except Exception as e2:
+                logger.error("DB persist failed (attempt 2): %s", e2)
 
     logger.info(
         "ANALYSIS product=%r cost=%.2f marketplace=%s sale=%.2f profit=%s roi=%s "

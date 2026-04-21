@@ -21,5 +21,10 @@ class User(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
+    stripe_customer_id: Mapped[str | None] = mapped_column(
+        String(255), unique=True, nullable=True, index=True
+    )
+
     analyses = relationship("Analysis", back_populates="user")
     watchlists = relationship("Watchlist", back_populates="user")
+    subscription = relationship("Subscription", back_populates="user", uselist=False)

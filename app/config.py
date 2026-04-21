@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     # Keepa (https://keepa.com) — datos de Amazon
     keepa_api_key: str = ""
 
+    # Stripe
+    stripe_secret_key: str = ""
+    stripe_publishable_key: str = ""
+    stripe_webhook_secret: str = ""
+
     # AI — Gemini preferido, OpenAI fallback
     gemini_api_key: str = ""
     openai_api_key: str = ""

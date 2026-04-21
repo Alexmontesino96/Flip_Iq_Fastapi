@@ -9,6 +9,7 @@ class UserOut(BaseModel):
     full_name: str | None
     tier: str
     credits_remaining: int
+    stripe_customer_id: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

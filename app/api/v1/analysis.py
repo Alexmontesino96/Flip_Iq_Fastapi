@@ -51,6 +51,9 @@ async def analyze_product(
             },
         )
 
+    # Resolve user_id ONCE and bind to this request
+    current_user_id = user.id if user else None
+
     result = await run_analysis(
         db=db,
         barcode=payload.barcode,
@@ -68,7 +71,7 @@ async def analyze_product(
         condition=payload.condition,
         mode=payload.mode,
         product_type=payload.product_type,
-        user_id=user.id if user else None,
+        user_id=current_user_id,
     )
 
     # Increment counter after successful analysis
