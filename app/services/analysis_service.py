@@ -2296,26 +2296,30 @@ def _calculate_all_channels(
 
 
 def _assign_channel_labels(channels: list[ChannelBreakdown]) -> None:
-    """Asigna labels BEST PROFIT y BEST ROI a los canales."""
+    """Asigna labels BEST PROFIT y BEST ROI a los canales.
+
+    Only channels with real comps data (is_estimated=False) qualify for labels.
+    Estimated channels inherit prices from the primary marketplace and shouldn't
+    be labeled as "BEST PROFIT" — their numbers are speculative.
+    """
     if not channels:
         return
     # Reset labels
     for ch in channels:
         ch.label = None
 
-    # Channels ya vienen sorted por profit desc → channels[0] es el de mayor profit
-    profitable_channels = [ch for ch in channels if ch.profit > 0]
+    # Only channels with real data qualify for labels
+    real_profitable = [ch for ch in channels if ch.profit > 0 and not ch.is_estimated]
 
-    if len(profitable_channels) == 1:
-        # Solo 1 canal es rentable → "ONLY PROFITABLE"
-        profitable_channels[0].label = "ONLY PROFITABLE"
-    elif len(profitable_channels) > 1:
-        # Varios canales rentables → BEST PROFIT + BEST ROI
-        channels[0].label = "BEST PROFIT"
-        best_roi_idx = max(range(len(channels)), key=lambda i: channels[i].roi_pct)
-        if best_roi_idx != 0:
-            channels[best_roi_idx].label = "BEST ROI"
-    # Si ninguno es rentable, no se asigna label
+    if len(real_profitable) == 1:
+        real_profitable[0].label = "ONLY PROFITABLE"
+    elif len(real_profitable) > 1:
+        # Sorted by profit desc already
+        real_profitable[0].label = "BEST PROFIT"
+        best_roi = max(real_profitable, key=lambda c: c.roi_pct)
+        if best_roi is not real_profitable[0]:
+            best_roi.label = "BEST ROI"
+    # Si ninguno real es rentable, no se asigna label
 
 
 def _attach_execution_to_channels(
