@@ -1686,7 +1686,7 @@ async def run_analysis_progressive(
             opportunity_score=primary.opportunity,
             recommendation=primary.recommendation,
             channels=[c.model_dump() for c in channels] if channels else None,
-            engines_data=engines_data,
+            engines_data=None,  # filled later via UPDATE
             ai_explanation=None,  # filled later via UPDATE
             shipping_cost=shipping_cost,
             prep_cost=prep_cost,
