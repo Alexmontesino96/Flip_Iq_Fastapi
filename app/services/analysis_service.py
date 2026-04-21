@@ -1021,6 +1021,7 @@ async def run_analysis_progressive(
     # 0c. Categorizar producto: LLM extrae product_type del keyword
     # -----------------------------------------------------------------------
     category_result = None
+    category_slug: str | None = None
     if product_type:
         # Override manual del usuario — usar directo
         logger.info("product_type manual: '%s'", product_type)
