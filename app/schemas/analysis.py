@@ -352,6 +352,9 @@ class AnalysisResponse(BaseModel):
     category_slug: str | None = None
     observation_mode: bool = False
 
+    # No comps found — frontend should show "Product Not Found" UI
+    no_comps_found: bool = False
+
     # Análisis dual: cada marketplace con su pipeline completo
     ebay_analysis: MarketplaceAnalysis | None = None
     amazon_analysis: MarketplaceAnalysis | None = None
