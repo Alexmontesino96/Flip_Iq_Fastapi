@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.limiter import check_analysis_gate, increment_analysis_counter
 from app.core.redis_client import get_redis
 from app.core.security import get_current_user, get_current_user_optional
@@ -373,7 +374,17 @@ async def share_analysis(
         a.share_token = secrets.token_urlsafe(16)
         await db.commit()
 
-    return {"share_token": a.share_token, "share_url": f"/shared/{a.share_token}"}
+    frontend_url = settings.cors_origins[0] if settings.cors_origins else "https://www.getflipiq.com"
+    # Prefer the production frontend URL
+    for origin in settings.cors_origins:
+        if "getflipiq" in origin or "vercel" in origin:
+            frontend_url = origin
+            break
+
+    return {
+        "share_token": a.share_token,
+        "share_url": f"{frontend_url}/shared/{a.share_token}",
+    }
 
 
 @router.get("/shared/{share_token}")
