@@ -1,5 +1,6 @@
 import json
 import logging
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -259,6 +260,156 @@ async def list_flagged(
     ]
 
 
+@router.get("/share/{share_token}")
+async def get_shared_analysis(
+    share_token: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Public endpoint — view a shared analysis without authentication."""
+    query = select(Analysis).where(Analysis.share_token == share_token)
+    result = await db.execute(query)
+    a = result.scalar_one_or_none()
+    if a is None:
+        raise HTTPException(status_code=404, detail="Shared analysis not found")
+
+    product = await db.get(Product, a.product_id)
+
+    engines = a.engines_data or {}
+    pricing = engines.get("pricing", {})
+    max_buy = engines.get("max_buy", {})
+    velocity = engines.get("velocity", {})
+    risk = engines.get("risk", {})
+    confidence = engines.get("confidence", {})
+
+    summary = None
+    if pricing:
+        cost = float(a.cost_price)
+        net = float(a.net_profit) if a.net_profit else 0
+        sale = float(a.estimated_sale_price) if a.estimated_sale_price else 0
+        max_buy_price = max_buy.get("recommended_max", 0)
+        stretch = pricing.get("stretch_list") if pricing.get("stretch_allowed", False) else None
+        summary = {
+            "recommendation": a.recommendation or "pass",
+            "signal": "positive" if a.recommendation in ("buy", "buy_small") else "neutral",
+            "buy_box": {
+                "recommended_max_buy": max_buy_price,
+                "your_cost": cost,
+                "headroom": max_buy_price - cost,
+            },
+            "sale_plan": {
+                "recommended_list_price": pricing.get("market_list", sale),
+                "quick_sale_price": pricing.get("quick_list", 0),
+                "stretch_price": stretch,
+            },
+            "returns": {
+                "profit": net,
+                "roi_pct": float(a.roi_pct) if a.roi_pct else 0,
+                "margin_pct": float(a.margin_pct) if a.margin_pct else 0,
+            },
+            "risk": risk.get("category", "medium"),
+            "confidence": confidence.get("category", "medium"),
+        }
+
+    cleaned = engines.get("cleaned_comps", {})
+    ebay_analysis = None
+    if cleaned:
+        ebay_analysis = {
+            "marketplace": "ebay",
+            "comps": {
+                "total_sold": cleaned.get("clean_total", 0),
+                "median_price": cleaned.get("median_price", 0),
+                "p25": cleaned.get("p25", 0),
+                "p75": cleaned.get("p75", 0),
+                "sales_per_day": velocity.get("sales_per_day", 0),
+                "days_of_data": cleaned.get("days_of_data", 0),
+            },
+            "velocity": {"score": velocity.get("score"), "category": velocity.get("category")},
+            "confidence": {"score": confidence.get("score"), "category": confidence.get("category")},
+        }
+
+    return {
+        "id": a.id,
+        "product": {
+            "id": product.id,
+            "title": product.title,
+            "brand": product.brand,
+            "image_url": product.image_url,
+        } if product else None,
+        "cost_price": float(a.cost_price),
+        "marketplace": a.marketplace,
+        "estimated_sale_price": float(a.estimated_sale_price) if a.estimated_sale_price else None,
+        "net_profit": float(a.net_profit) if a.net_profit else None,
+        "roi_pct": float(a.roi_pct) if a.roi_pct else None,
+        "flip_score": a.flip_score,
+        "risk_score": a.risk_score,
+        "velocity_score": a.velocity_score,
+        "recommendation": a.recommendation,
+        "channels": a.channels,
+        "summary": summary,
+        "ai_explanation": a.ai_explanation,
+        "ebay_analysis": ebay_analysis,
+        "created_at": a.created_at.isoformat(),
+    }
+
+
+@router.post("/{analysis_id}/share")
+async def share_analysis(
+    analysis_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Generate a shareable link for an analysis."""
+    result = await db.execute(
+        select(Analysis).where(
+            Analysis.id == analysis_id,
+            Analysis.user_id == user.id,
+        )
+    )
+    a = result.scalar_one_or_none()
+    if a is None:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    if not a.share_token:
+        a.share_token = secrets.token_urlsafe(16)
+        await db.commit()
+
+    return {"share_token": a.share_token, "share_url": f"/shared/{a.share_token}"}
+
+
+@router.get("/shared/{share_token}")
+async def get_shared_analysis(
+    share_token: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Public endpoint to view a shared analysis (no auth required)."""
+    result = await db.execute(
+        select(Analysis).where(Analysis.share_token == share_token)
+    )
+    a = result.scalar_one_or_none()
+    if a is None:
+        raise HTTPException(status_code=404, detail="Shared analysis not found")
+
+    product = await db.get(Product, a.product_id) if a.product_id else None
+
+    return {
+        "id": a.id,
+        "product": {
+            "title": product.title,
+            "brand": product.brand,
+            "image_url": product.image_url,
+        } if product else None,
+        "cost_price": float(a.cost_price),
+        "marketplace": a.marketplace,
+        "estimated_sale_price": float(a.estimated_sale_price) if a.estimated_sale_price else None,
+        "net_profit": float(a.net_profit) if a.net_profit else None,
+        "roi_pct": float(a.roi_pct) if a.roi_pct else None,
+        "flip_score": a.flip_score,
+        "recommendation": a.recommendation,
+        "ai_explanation": a.ai_explanation,
+        "created_at": a.created_at.isoformat(),
+    }
+
+
 @router.post("/{analysis_id}/feedback", response_model=FeedbackResponse)
 async def submit_feedback(
     analysis_id: int,
@@ -418,3 +569,34 @@ async def get_analysis_detail(
         "amazon_analysis": None,
         "created_at": a.created_at.isoformat(),
     }
+
+
+# ─── Share endpoints ───────────────────────────────────────────
+
+@router.post("/{analysis_id}/share")
+async def create_share_link(
+    analysis_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Generate a public share token for an analysis (owner only)."""
+    query = select(Analysis).where(
+        Analysis.id == analysis_id,
+        Analysis.user_id == user.id,
+    )
+    result = await db.execute(query)
+    a = result.scalar_one_or_none()
+    if a is None:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    # Reuse existing token if already shared
+    if not a.share_token:
+        a.share_token = secrets.token_urlsafe(16)
+        await db.commit()
+        await db.refresh(a)
+
+    base_url = str(request.base_url).rstrip("/")
+    share_url = f"{base_url}/api/v1/analysis/share/{a.share_token}"
+
+    return {"share_token": a.share_token, "share_url": share_url}
