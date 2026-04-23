@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import auth, products, analysis, watchlists, waitlist_route, search, ebay_webhook, billing
+from app.api.v1 import auth, products, analysis, watchlists, waitlist_route, search, ebay_webhook, billing, admin
 
 api_router = APIRouter()
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
@@ -11,3 +11,4 @@ api_router.include_router(waitlist_route.router, prefix="/waitlist", tags=["wait
 api_router.include_router(search.router, prefix="/search", tags=["search"])
 api_router.include_router(ebay_webhook.router, prefix="/ebay/webhook", tags=["ebay-webhook"])
 api_router.include_router(billing.router, prefix="/billing", tags=["billing"])
+api_router.include_router(admin.router, prefix="/admin", tags=["admin"])

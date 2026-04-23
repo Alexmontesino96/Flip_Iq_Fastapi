@@ -1718,6 +1718,29 @@ async def run_analysis_progressive(
                 logger.error("DB persist failed (attempt 2): %s", e2)
 
     # -----------------------------------------------------------------------
+    # AUTO: crear manual review request si no hay comps
+    # -----------------------------------------------------------------------
+    if not has_valid_comps and user_id:
+        try:
+            from app.models.manual_review import ManualReviewRequest
+            review = ManualReviewRequest(
+                user_id=user_id,
+                analysis_id=analysis_id,
+                query=barcode or keyword or "",
+                barcode=barcode,
+                cost_price=cost_price,
+                marketplace=marketplace,
+            )
+            db.add(review)
+            await db.commit()
+        except Exception as e:
+            logger.warning("Manual review request failed: %s", e)
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+
+    # -----------------------------------------------------------------------
     # YIELD 1: Respuesta parcial (sin AI explanation)
     # -----------------------------------------------------------------------
     yield _progress(
