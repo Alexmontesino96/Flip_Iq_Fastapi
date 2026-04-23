@@ -65,11 +65,19 @@ class Settings(BaseSettings):
     stripe_secret_key: str = ""
     stripe_publishable_key: str = ""
     stripe_webhook_secret: str = ""
+    stripe_price_basic: str = ""
+    stripe_price_premium: str = ""
 
     # AI — Gemini preferido, OpenAI fallback
     gemini_api_key: str = ""
     openai_api_key: str = ""
     brave_search_api_key: str = ""
+
+    # ML Models (local, reemplazan LLM para comp_relevance y title_enricher)
+    ml_models_dir: str = "models"
+    ml_comp_relevance_enabled: bool = False
+    ml_condition_enabled: bool = False
+    ml_shadow_mode: bool = True  # True = ejecuta ML + LLM y compara
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

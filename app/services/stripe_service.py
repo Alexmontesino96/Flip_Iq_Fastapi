@@ -21,23 +21,29 @@ stripe.api_version = "2025-04-30.basil"
 # ---------------------------------------------------------------------------
 # Plan configuration — map price IDs to internal tier names
 # ---------------------------------------------------------------------------
-# Set these in .env or update after creating products in Stripe Dashboard.
-# Format: STRIPE_PRICE_PRO=price_xxx
 PLAN_CONFIG: dict[str, dict] = {
     "basic": {
         "name": "Basic",
         "credits": 750,       # ~25/day
         "daily_limit": 25,
+        "stripe_price_id": settings.stripe_price_basic,
     },
     "premium": {
         "name": "Premium",
         "credits": 3000,      # ~100/day
         "daily_limit": 100,
+        "stripe_price_id": settings.stripe_price_premium,
     },
 }
 
 # Reverse lookup: stripe price_id → plan name (populated at startup)
 _price_to_plan: dict[str, str] = {}
+
+# Auto-register price IDs from config
+for _plan_name, _plan_cfg in PLAN_CONFIG.items():
+    _pid = _plan_cfg.get("stripe_price_id", "")
+    if _pid:
+        _price_to_plan[_pid] = _plan_name
 
 
 def register_price(price_id: str, plan: str) -> None:

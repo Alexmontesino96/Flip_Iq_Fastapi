@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.limiter import TIER_DAILY_LIMITS
+from app.core.redis_client import get_redis
 from app.core.security import get_current_user
 from app.database import get_db
 from app.models.user import User
@@ -23,6 +25,49 @@ from app.services import stripe_service
 logger = logging.getLogger("flipiq.billing")
 
 router = APIRouter()
+
+
+@router.get("/me")
+async def get_my_usage(
+    user: User = Depends(get_current_user),
+    redis=Depends(get_redis),
+):
+    """Return current plan, daily limit, and scans used/remaining today."""
+    tier = user.tier
+    daily_limit = TIER_DAILY_LIMITS.get(tier, 5)
+    used_today = 0
+    reset_in = 0
+
+    if redis:
+        try:
+            key = f"tier:{tier}:{user.id}"
+            used_today = int(await redis.get(key) or 0)
+            ttl = await redis.ttl(key)
+            reset_in = max(ttl, 0)
+        except Exception:
+            pass
+
+    return {
+        "plan": tier,
+        "daily_limit": daily_limit,
+        "scans_used_today": used_today,
+        "scans_remaining_today": max(daily_limit - used_today, 0),
+        "reset_in_seconds": reset_in,
+    }
+
+
+@router.get("/plans")
+async def list_plans():
+    """Return available plans with Stripe price IDs for checkout."""
+    plans = []
+    for plan_id, cfg in stripe_service.PLAN_CONFIG.items():
+        plans.append({
+            "id": plan_id,
+            "name": cfg["name"],
+            "stripe_price_id": cfg["stripe_price_id"],
+            "daily_limit": cfg["daily_limit"],
+        })
+    return {"plans": plans}
 
 
 @router.post("/checkout", response_model=CheckoutResponse)
