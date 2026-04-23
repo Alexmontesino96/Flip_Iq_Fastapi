@@ -25,27 +25,22 @@ class TestSetCredits:
     def test_free_tier(self):
         user = MagicMock()
         _set_credits(user, "free")
-        assert user.credits_remaining == 20
+        assert user.credits_remaining == 150
 
-    def test_pro_tier(self):
+    def test_basic_tier(self):
         user = MagicMock()
-        _set_credits(user, "pro")
-        assert user.credits_remaining == 100
+        _set_credits(user, "basic")
+        assert user.credits_remaining == 750
 
-    def test_business_tier(self):
+    def test_premium_tier(self):
         user = MagicMock()
-        _set_credits(user, "business")
-        assert user.credits_remaining == 500
-
-    def test_power_tier(self):
-        user = MagicMock()
-        _set_credits(user, "power")
-        assert user.credits_remaining == 999999
+        _set_credits(user, "premium")
+        assert user.credits_remaining == 3000
 
     def test_unknown_tier_defaults_to_free(self):
         user = MagicMock()
         _set_credits(user, "unknown")
-        assert user.credits_remaining == 20
+        assert user.credits_remaining == 150
 
 
 class TestTimestamp:
@@ -65,11 +60,11 @@ class TestTimestamp:
 
 class TestPlanForPrice:
     def test_registered_price(self):
-        register_price("price_test_123", "business")
-        assert plan_for_price("price_test_123") == "business"
+        register_price("price_test_123", "premium")
+        assert plan_for_price("price_test_123") == "premium"
 
-    def test_unknown_price_defaults_to_pro(self):
-        assert plan_for_price("price_unknown_xyz") == "pro"
+    def test_unknown_price_defaults_to_basic(self):
+        assert plan_for_price("price_unknown_xyz") == "basic"
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +91,7 @@ class TestGetSubscriptionStatus:
         sub_mock = MagicMock()
         sub_mock.stripe_subscription_id = "sub_123"
         sub_mock.status = "active"
-        sub_mock.plan = "pro"
+        sub_mock.plan = "basic"
         sub_mock.current_period_end = datetime(2026, 5, 20, tzinfo=timezone.utc)
         sub_mock.cancel_at_period_end = False
 
@@ -106,7 +101,7 @@ class TestGetSubscriptionStatus:
 
         result = await get_subscription_status(user, db)
         assert result is not None
-        assert result["plan"] == "pro"
+        assert result["plan"] == "basic"
         assert result["status"] == "active"
         assert result["cancel_at_period_end"] is False
 
@@ -150,7 +145,7 @@ class TestWebhookHandling:
         sub_mock.status = "active"
 
         user_mock = MagicMock()
-        user_mock.tier = "pro"
+        user_mock.tier = "basic"
 
         db = AsyncMock()
         result_mock = MagicMock()
@@ -162,7 +157,7 @@ class TestWebhookHandling:
 
         assert sub_mock.status == "canceled"
         assert user_mock.tier == "free"
-        assert user_mock.credits_remaining == 20
+        assert user_mock.credits_remaining == 150
 
 
 # ---------------------------------------------------------------------------
@@ -189,11 +184,11 @@ class TestBillingSchemas:
         from app.schemas.billing import SubscriptionStatus
         status = SubscriptionStatus(
             has_subscription=True,
-            plan="pro",
+            plan="basic",
             status="active",
             current_period_end="2026-05-20T00:00:00+00:00",
             cancel_at_period_end=False,
             stripe_customer_id="cus_123",
         )
-        assert status.plan == "pro"
+        assert status.plan == "basic"
         assert status.stripe_customer_id == "cus_123"

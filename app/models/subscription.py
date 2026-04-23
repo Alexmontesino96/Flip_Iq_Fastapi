@@ -16,7 +16,7 @@ class Subscription(Base):
     )
     stripe_price_id: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(50))  # active|past_due|canceled|trialing|unpaid
-    plan: Mapped[str] = mapped_column(String(20))  # pro|business|power
+    plan: Mapped[str] = mapped_column(String(20))  # basic|premium
     current_period_start: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

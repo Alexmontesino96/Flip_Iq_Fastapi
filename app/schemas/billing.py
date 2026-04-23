@@ -23,7 +23,7 @@ class PortalResponse(BaseModel):
 
 class SubscriptionStatus(BaseModel):
     has_subscription: bool
-    plan: str  # free|pro|business|power
+    plan: str  # free|basic|premium
     status: str | None = None  # active|past_due|canceled|trialing|unpaid
     current_period_end: str | None = None
     cancel_at_period_end: bool = False

@@ -41,12 +41,12 @@ async def analyze_product(
     user: User | None = Depends(get_current_user_optional),
 ):
     # Soft gate check
-    gate = await check_analysis_gate(request, redis, db)
+    gate = await check_analysis_gate(request, redis, db, user=user)
     if not gate.allowed:
         return JSONResponse(
             status_code=403,
             content={
-                "reason": "free_limit_reached",
+                "reason": "limit_reached",
                 "tier": gate.tier,
                 "remaining": gate.remaining,
                 "reset_in_seconds": gate.reset_in,
@@ -77,7 +77,7 @@ async def analyze_product(
     )
 
     # Increment counter after successful analysis
-    await increment_analysis_counter(request, redis, gate)
+    await increment_analysis_counter(request, redis, gate, user=user)
 
     # Rate-limit headers on the normal response
     remaining = max(gate.remaining - 1, 0)
@@ -100,19 +100,19 @@ async def analyze_product_stream(
     inyectada por Depends) porque FastAPI cierra las dependencias cuando el
     handler retorna, pero StreamingResponse sigue corriendo después.
     """
-    gate = await check_analysis_gate(request, redis, db)
+    gate = await check_analysis_gate(request, redis, db, user=user)
     if not gate.allowed:
         return JSONResponse(
             status_code=403,
             content={
-                "reason": "free_limit_reached",
+                "reason": "limit_reached",
                 "tier": gate.tier,
                 "remaining": gate.remaining,
                 "reset_in_seconds": gate.reset_in,
             },
         )
 
-    await increment_analysis_counter(request, redis, gate)
+    await increment_analysis_counter(request, redis, gate, user=user)
 
     # Capturar user_id ANTES del stream (Depends se cierra cuando el handler retorna)
     user_id = user.id if user else None

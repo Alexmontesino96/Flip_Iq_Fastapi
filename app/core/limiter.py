@@ -35,6 +35,13 @@ VERIFIED_LIMIT = 100
 TTL_24H = 86400
 TTL_30D = 2592000
 
+# Daily scan limits per tier (authenticated users)
+TIER_DAILY_LIMITS: dict[str, int] = {
+    "free": 5,
+    "basic": 25,
+    "premium": 100,
+}
+
 
 @dataclass
 class GateResult:
@@ -46,6 +53,7 @@ class GateResult:
 
 async def check_analysis_gate(
     request: Request, redis, db: AsyncSession | None = None,
+    user=None,
 ) -> GateResult:
     """Check if the request is allowed to run an analysis.
 
@@ -54,12 +62,30 @@ async def check_analysis_gate(
 
     Fail-open: any Redis error allows the request through.
     """
-    # 1. Authenticated user (Supabase JWT) → unlimited
-    # NOTE: this only bypasses the rate-limit gate; real auth validation
-    # happens in the auth dependency. Any long Bearer header skips the gate.
+    # 1. Authenticated user → tier-based daily limit
     auth = request.headers.get("authorization", "")
     if auth.startswith("Bearer ") and len(auth) > 40:
-        return GateResult(allowed=True, tier="authenticated", remaining=VERIFIED_LIMIT)
+        user_tier = user.tier if user else "free"
+        daily_limit = TIER_DAILY_LIMITS.get(user_tier, 5)
+
+        if redis is None:
+            return GateResult(allowed=True, tier=user_tier, remaining=daily_limit)
+
+        try:
+            user_id = str(user.id) if user else "unknown"
+            key = f"tier:{user_tier}:{user_id}"
+            count = int(await redis.get(key) or 0)
+            if count >= daily_limit:
+                ttl = await redis.ttl(key)
+                return GateResult(
+                    allowed=False, tier=user_tier, remaining=0, reset_in=max(ttl, 0)
+                )
+            return GateResult(
+                allowed=True, tier=user_tier, remaining=daily_limit - count
+            )
+        except Exception as e:
+            logger.warning("Redis error en auth gate, fail-open: %s", e)
+            return GateResult(allowed=True, tier=user_tier, remaining=daily_limit)
 
     # Redis unavailable → fail open
     if redis is None:
@@ -132,9 +158,22 @@ async def _check_gate_redis(
     )
 
 
-async def increment_analysis_counter(request: Request, redis, gate: GateResult) -> None:
+async def increment_analysis_counter(
+    request: Request, redis, gate: GateResult, user=None,
+) -> None:
     """Increment the counter AFTER a successful analysis."""
-    if redis is None or gate.tier == "authenticated":
+    if redis is None:
+        return
+
+    # Authenticated user — increment tier-based counter
+    if gate.tier in TIER_DAILY_LIMITS and user:
+        try:
+            key = f"tier:{gate.tier}:{user.id}"
+            count = await redis.incr(key)
+            if count == 1:
+                await redis.expire(key, TTL_24H)
+        except Exception as e:
+            logger.warning("Error incrementando contador tier: %s", e)
         return
 
     try:

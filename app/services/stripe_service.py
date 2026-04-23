@@ -24,17 +24,15 @@ stripe.api_version = "2025-04-30.basil"
 # Set these in .env or update after creating products in Stripe Dashboard.
 # Format: STRIPE_PRICE_PRO=price_xxx
 PLAN_CONFIG: dict[str, dict] = {
-    "pro": {
-        "name": "Pro",
-        "credits": 100,
+    "basic": {
+        "name": "Basic",
+        "credits": 750,       # ~25/day
+        "daily_limit": 25,
     },
-    "business": {
-        "name": "Business",
-        "credits": 500,
-    },
-    "power": {
-        "name": "Power",
-        "credits": -1,  # unlimited
+    "premium": {
+        "name": "Premium",
+        "credits": 3000,      # ~100/day
+        "daily_limit": 100,
     },
 }
 
@@ -48,8 +46,8 @@ def register_price(price_id: str, plan: str) -> None:
 
 
 def plan_for_price(price_id: str) -> str:
-    """Resolve plan name from price_id, default to 'pro'."""
-    return _price_to_plan.get(price_id, "pro")
+    """Resolve plan name from price_id, default to 'basic'."""
+    return _price_to_plan.get(price_id, "basic")
 
 
 # ---------------------------------------------------------------------------
@@ -283,8 +281,8 @@ async def _upsert_subscription(
 
 def _set_credits(user: User, tier: str) -> None:
     """Set credits_remaining based on tier."""
-    credits_map = {"free": 20, "pro": 100, "business": 500, "power": 999999}
-    user.credits_remaining = credits_map.get(tier, 20)
+    credits_map = {"free": 150, "basic": 750, "premium": 3000}
+    user.credits_remaining = credits_map.get(tier, 150)
 
 
 def _ts(unix_ts: int | None) -> datetime | None:
