@@ -50,6 +50,9 @@ class Analysis(Base):
     # Data quality flags
     no_comps_found: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
+    # Share
+    share_token: Mapped[str | None] = mapped_column(String(32), unique=True, nullable=True, index=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
