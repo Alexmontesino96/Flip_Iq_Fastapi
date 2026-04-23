@@ -374,10 +374,9 @@ async def share_analysis(
         a.share_token = secrets.token_urlsafe(16)
         await db.commit()
 
-    frontend_url = settings.cors_origins[0] if settings.cors_origins else "https://www.getflipiq.com"
-    # Prefer the production frontend URL
+    frontend_url = "https://www.getflipiq.com"
     for origin in settings.cors_origins:
-        if "getflipiq" in origin or "vercel" in origin:
+        if "getflipiq.com" in origin:
             frontend_url = origin
             break
 
