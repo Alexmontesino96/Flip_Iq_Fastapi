@@ -120,6 +120,62 @@ async def create_portal_session(
 
 
 # ---------------------------------------------------------------------------
+# Change plan (upgrade/downgrade existing subscription)
+# ---------------------------------------------------------------------------
+async def change_subscription_plan(
+    user: User,
+    new_price_id: str,
+    db: AsyncSession,
+) -> dict:
+    """Change an existing subscription to a new price.
+
+    - Upgrade: applied immediately, prorated.
+    - Downgrade: scheduled for end of current period.
+    """
+    result = await db.execute(
+        select(Subscription).where(
+            Subscription.user_id == user.id,
+            Subscription.status.in_(("active", "trialing")),
+        )
+    )
+    db_sub = result.scalar_one_or_none()
+    if not db_sub:
+        raise ValueError("No active subscription found")
+
+    # Determine if upgrade or downgrade
+    current_plan = db_sub.plan
+    new_plan = plan_for_price(new_price_id)
+    plan_order = {"basic": 1, "premium": 2}
+    is_upgrade = plan_order.get(new_plan, 0) > plan_order.get(current_plan, 0)
+
+    # Fetch subscription from Stripe
+    sub = stripe.Subscription.retrieve(db_sub.stripe_subscription_id)
+    item_id = sub.items.data[0].id
+
+    if is_upgrade:
+        # Upgrade: immediate, prorated
+        updated = stripe.Subscription.modify(
+            db_sub.stripe_subscription_id,
+            items=[{"id": item_id, "price": new_price_id}],
+            proration_behavior="create_prorations",
+        )
+    else:
+        # Downgrade: at end of period
+        updated = stripe.Subscription.modify(
+            db_sub.stripe_subscription_id,
+            items=[{"id": item_id, "price": new_price_id}],
+            proration_behavior="none",
+            billing_cycle_anchor="unchanged",
+        )
+
+    return {
+        "plan": new_plan,
+        "effective": "immediate" if is_upgrade else "end_of_period",
+        "current_period_end": db_sub.current_period_end.isoformat() if db_sub.current_period_end else None,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Webhook event processing
 # ---------------------------------------------------------------------------
 def construct_webhook_event(payload: bytes, sig_header: str) -> stripe.Event:
@@ -136,6 +192,7 @@ async def handle_webhook_event(event: stripe.Event, db: AsyncSession) -> None:
         "customer.subscription.updated": _handle_subscription_updated,
         "customer.subscription.deleted": _handle_subscription_deleted,
         "invoice.payment_failed": _handle_payment_failed,
+        "invoice.payment_succeeded": _handle_payment_succeeded,
     }
     handler = handlers.get(event.type)
     if handler:
@@ -225,6 +282,28 @@ async def _handle_subscription_deleted(event: stripe.Event, db: AsyncSession) ->
         _set_credits(user, "free")
 
     await db.commit()
+
+
+async def _handle_payment_succeeded(event: stripe.Event, db: AsyncSession) -> None:
+    """Invoice paid — reset daily credits for the billing period."""
+    invoice = event.data.object
+    if not invoice.subscription:
+        return
+
+    result = await db.execute(
+        select(Subscription).where(
+            Subscription.stripe_subscription_id == invoice.subscription
+        )
+    )
+    db_sub = result.scalar_one_or_none()
+    if not db_sub:
+        return
+
+    user = await db.get(User, db_sub.user_id)
+    if user:
+        _set_credits(user, db_sub.plan)
+        await db.commit()
+        logger.info("Credits reset for user %s (plan=%s)", user.id, db_sub.plan)
 
 
 async def _handle_payment_failed(event: stripe.Event, db: AsyncSession) -> None:

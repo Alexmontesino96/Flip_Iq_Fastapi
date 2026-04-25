@@ -70,6 +70,31 @@ async def list_plans():
     return {"plans": plans}
 
 
+@router.post("/change-plan")
+async def change_plan(
+    payload: CheckoutRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Change plan for users with active subscription (upgrade/downgrade).
+
+    - Upgrade (basic→premium): immediate, prorated.
+    - Downgrade (premium→basic): takes effect at end of billing period.
+    """
+    try:
+        result = await stripe_service.change_subscription_plan(
+            user=user,
+            new_price_id=payload.price_id,
+            db=db,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Error changing plan: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/checkout", response_model=CheckoutResponse)
 async def create_checkout(
     payload: CheckoutRequest,
