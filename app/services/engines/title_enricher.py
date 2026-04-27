@@ -18,10 +18,40 @@ from app.services.marketplace.base import CompsResult
 
 logger = logging.getLogger(__name__)
 
-# Batches de 30 títulos: balance entre velocidad y timeout de Gemini.
-_LLM_BATCH_SIZE = 30
-# Concurrencia: 4 batches simultáneos
-_LLM_CONCURRENCY = 4
+
+async def _log_enrichment_samples(
+    titles: list[str],
+    enrichments: list["TitleEnrichment"],
+    provider: str,
+) -> None:
+    """Fire-and-forget: guarda pares (title, enrichment) para ML training."""
+    try:
+        from app.database import async_session
+        from app.models.ml_training import MLTrainingSample
+
+        async with async_session() as session:
+            for title, enr in zip(titles, enrichments):
+                session.add(MLTrainingSample(
+                    task="title_enrichment",
+                    input_keyword=None,
+                    input_title=title,
+                    llm_output={
+                        "condition": enr.condition,
+                        "brand": enr.brand,
+                        "model": enr.model,
+                        "is_bundle": enr.is_bundle,
+                        "lot_size": enr.lot_size,
+                    },
+                    llm_provider=provider,
+                ))
+            await session.commit()
+    except Exception as e:
+        logger.debug("ML training log failed (non-critical): %s", e)
+
+# Batches de 60 títulos: Gemini handles this fine (<2KB payload).
+_LLM_BATCH_SIZE = 60
+# Concurrencia: 6 batches simultáneos
+_LLM_CONCURRENCY = 6
 
 # Condiciones detectables por regex en títulos eBay
 _NEW_PATTERNS = re.compile(
@@ -211,13 +241,19 @@ async def _llm_extract_batch(
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
         ],
-        max_tokens=8192,
+        max_tokens=2048,
         temperature=0.1,
         timeout=45,
     )
 
     raw_text = response.choices[0].message.content.strip()
-    return _parse_llm_response(raw_text, titles)
+    enrichments = _parse_llm_response(raw_text, titles)
+
+    # Log para ML training (fire-and-forget)
+    provider = "gemini" if "gemini" in model.lower() else "openai"
+    asyncio.create_task(_log_enrichment_samples(titles, enrichments, provider))
+
+    return enrichments
 
 
 async def _llm_extract(
@@ -285,7 +321,9 @@ async def enrich_listings(
 ) -> CompsResult:
     """Enriquece listings con datos inferidos por LLM.
 
-    Envía títulos en batches paralelos a GPT-4o-mini.
+    Deduplicates titles before sending to LLM to avoid processing
+    identical titles multiple times (common with eBay listings).
+
     Fallback: regex-based extraction si LLM falla o no hay API key.
     """
     if not comps.listings:
@@ -293,26 +331,45 @@ async def enrich_listings(
 
     titles = [l.title for l in comps.listings]
 
+    # --- Dedup: only send unique titles to LLM ---
+    unique_titles: list[str] = []
+    title_to_idx: dict[str, int] = {}  # title → index in unique_titles
+    for title in titles:
+        normalized = title.strip()
+        if normalized not in title_to_idx:
+            title_to_idx[normalized] = len(unique_titles)
+            unique_titles.append(normalized)
+
+    dedup_ratio = 1 - len(unique_titles) / len(titles) if titles else 0
+    if dedup_ratio > 0:
+        logger.info(
+            "Title dedup: %d → %d unique (%.0f%% saved)",
+            len(titles), len(unique_titles), dedup_ratio * 100,
+        )
+
     from app.core.llm import has_llm
 
     if has_llm():
         try:
-            enrichments = await _llm_extract(titles, keyword)
+            unique_enrichments = await _llm_extract(unique_titles, keyword)
         except Exception as e:
             logger.warning("LLM title enrichment failed, using regex fallback: %s", e)
-            enrichments = _regex_fallback(titles)
+            unique_enrichments = _regex_fallback(unique_titles)
     else:
-        enrichments = _regex_fallback(titles)
+        unique_enrichments = _regex_fallback(unique_titles)
 
-    for listing, enrichment in zip(comps.listings, enrichments):
-        # Solo sobreescribir si el listing no tiene datos de Apify
+    # --- Expand: map unique results back to all listings ---
+    for listing, title in zip(comps.listings, titles):
+        normalized = title.strip()
+        idx = title_to_idx[normalized]
+        enrichment = unique_enrichments[idx]
+
         if not listing.condition and enrichment.condition:
             listing.condition = enrichment.condition
         if not listing.brand and enrichment.brand:
             listing.brand = enrichment.brand
         if not listing.model and enrichment.model:
             listing.model = enrichment.model
-        # Bundle metadata siempre del enrichment
         listing.is_bundle = enrichment.is_bundle
         listing.lot_size = enrichment.lot_size
 
