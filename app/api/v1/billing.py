@@ -56,17 +56,73 @@ async def get_my_usage(
     }
 
 
+_PLAN_CATALOG = [
+    {
+        "id": "free",
+        "name": "Free",
+        "price": 0,
+        "original_price": None,
+        "daily_limit": 5,
+        "stripe_price_id": None,
+        "tag": None,
+        "ai_unlocked": False,
+        "features": [
+            "eBay comps only",
+            "Keyword search",
+            "Basic flip score",
+            "1 watchlist",
+        ],
+    },
+    {
+        "id": "starter",
+        "name": "Starter",
+        "price": 9.99,
+        "original_price": 14.99,
+        "daily_limit": 30,
+        "stripe_price_id": None,  # filled at runtime
+        "tag": "Launch price",
+        "ai_unlocked": True,
+        "features": [
+            "Everything in Free",
+            "AI analysis unlocked",
+            "eBay + Amazon comps",
+            "Barcode scanning",
+            "Push alerts",
+            "5 watchlists",
+        ],
+    },
+    {
+        "id": "pro",
+        "name": "Pro",
+        "price": 19.99,
+        "original_price": 29.99,
+        "daily_limit": 100,
+        "stripe_price_id": None,  # filled at runtime
+        "tag": "Launch price",
+        "ai_unlocked": True,
+        "features": [
+            "Everything in Starter",
+            "Market Intelligence AI",
+            "CSV export",
+            "Push + email alerts",
+            "Unlimited watchlists",
+            "Priority support",
+        ],
+    },
+]
+
+
 @router.get("/plans")
 async def list_plans():
-    """Return available plans with Stripe price IDs for checkout."""
+    """Return all plans with prices, features, and Stripe price IDs."""
     plans = []
-    for plan_id, cfg in stripe_service.PLAN_CONFIG.items():
-        plans.append({
-            "id": plan_id,
-            "name": cfg["name"],
-            "stripe_price_id": cfg["stripe_price_id"],
-            "daily_limit": cfg["daily_limit"],
-        })
+    for plan in _PLAN_CATALOG:
+        entry = {**plan}
+        # Fill stripe_price_id from config for paid plans
+        cfg = stripe_service.PLAN_CONFIG.get(plan["id"])
+        if cfg:
+            entry["stripe_price_id"] = cfg["stripe_price_id"]
+        plans.append(entry)
     return {"plans": plans}
 
 
