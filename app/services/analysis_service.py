@@ -564,6 +564,60 @@ def _execution_to_schema(execution: ExecutionResult) -> ExecutionAnalysisOut:
     )
 
 
+def _pipeline_to_engines_dict(p: _PipelineResult) -> dict:
+    """Extract engine outputs from a pipeline for DB persistence."""
+    return {
+        "marketplace": p.marketplace_name,
+        "pricing": asdict(p.pricing),
+        "profit_market": asdict(p.profit_market),
+        "profit_quick": asdict(p.profit_quick),
+        "max_buy": asdict(p.max_buy),
+        "velocity": asdict(p.velocity),
+        "risk": asdict(p.risk),
+        "confidence": asdict(p.confidence),
+        "seller_premium": asdict(p.seller),
+        "competition": asdict(p.competition),
+        "trend": asdict(p.trend),
+        "listing_strategy": asdict(p.listing),
+        "title_risk": asdict(p.title_risk),
+        "condition_analysis": p.condition_analysis.model_dump(),
+        "opportunity_score": p.opportunity,
+        "recommendation": p.recommendation,
+        "execution": asdict(p.execution) if p.execution else None,
+        "has_valid_comps": p.has_valid_comps,
+        "cleaned_comps": {
+            "raw_total": p.cleaned.raw_total,
+            "clean_total": p.cleaned.clean_total,
+            "outliers_removed": p.cleaned.outliers_removed,
+            "relevance_filtered": p.cleaned.relevance_filtered,
+            "cv": p.cleaned.cv,
+            "median_price": p.cleaned.median_price,
+            "min_price": p.cleaned.min_price,
+            "max_price": p.cleaned.max_price,
+            "avg_price": p.cleaned.avg_price,
+            "std_dev": p.cleaned.std_dev,
+            "p25": p.cleaned.p25,
+            "p75": p.cleaned.p75,
+            "days_of_data": p.cleaned.days_of_data,
+            "sales_per_day": p.cleaned.sales_per_day,
+            "temporal_window_expanded": p.cleaned.temporal_window_expanded,
+            "initial_days_requested": p.cleaned.initial_days_requested,
+        },
+        "warnings": p.warnings,
+    }
+
+
+def _build_marketplace_engines(
+    ebay_pipeline: _PipelineResult,
+    amazon_pipeline: _PipelineResult | None,
+) -> dict:
+    """Build per-marketplace engine data for DB persistence."""
+    result = {"ebay": _pipeline_to_engines_dict(ebay_pipeline)}
+    if amazon_pipeline:
+        result["amazon"] = _pipeline_to_engines_dict(amazon_pipeline)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Helpers de scores, decisión, validación (sin cambios)
 # ---------------------------------------------------------------------------
@@ -1364,7 +1418,7 @@ async def run_analysis_progressive(
     amazon_pipeline: _PipelineResult | None = None
     if amazon_raw and amazon_raw.listings:
         amazon_pipeline = _run_pipeline(
-            amazon_raw, marketplace_name="amazon_fba", enriched=False,
+            amazon_raw, marketplace_name="amazon_fba", enriched=True,
             config=amazon_config, **pipeline_kwargs,
         )
 
@@ -1991,6 +2045,10 @@ async def run_analysis_progressive(
                 "diagnostics": primary.raw_comps.diagnostics,
             },
         },
+        # Per-marketplace engine outputs for accurate GET reconstruction
+        "marketplace_engines": _build_marketplace_engines(
+            ebay_pipeline, amazon_pipeline,
+        ),
     }
 
     # UPDATE analysis with AI explanation + post-intelligence adjustments

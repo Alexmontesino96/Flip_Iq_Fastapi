@@ -31,6 +31,78 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _reconstruct_marketplace_analysis(
+    mp_engines: dict | None,
+    marketplace: str,
+) -> dict | None:
+    """Reconstruct a marketplace analysis dict from per-marketplace engines_data."""
+    if not mp_engines:
+        return None
+    cleaned = mp_engines.get("cleaned_comps", {})
+    if not cleaned or cleaned.get("clean_total", 0) == 0:
+        return None
+    velocity = mp_engines.get("velocity", {})
+    confidence = mp_engines.get("confidence", {})
+    risk = mp_engines.get("risk", {})
+    pricing = mp_engines.get("pricing", {})
+    profit = mp_engines.get("profit_market", {})
+    max_buy = mp_engines.get("max_buy", {})
+    competition = mp_engines.get("competition", {})
+    trend = mp_engines.get("trend", {})
+    return {
+        "marketplace": marketplace,
+        "comps": {
+            "total_sold": cleaned.get("clean_total", 0),
+            "median_price": cleaned.get("median_price", 0),
+            "avg_price": cleaned.get("avg_price", 0),
+            "min_price": cleaned.get("min_price", 0),
+            "max_price": cleaned.get("max_price", 0),
+            "p25": cleaned.get("p25", 0),
+            "p75": cleaned.get("p75", 0),
+            "sales_per_day": cleaned.get("sales_per_day", 0),
+            "days_of_data": cleaned.get("days_of_data", 0),
+        },
+        "pricing": {
+            "market_list": pricing.get("market_list"),
+            "quick_list": pricing.get("quick_list"),
+            "stretch_list": pricing.get("stretch_list"),
+            "stretch_allowed": pricing.get("stretch_allowed", False),
+        } if pricing else None,
+        "profit_detail": {
+            "profit": profit.get("profit"),
+            "roi": profit.get("roi"),
+            "margin": profit.get("margin"),
+        } if profit else None,
+        "max_buy_price": {
+            "recommended_max": max_buy.get("recommended_max"),
+        } if max_buy else None,
+        "velocity": {
+            "score": velocity.get("score"),
+            "category": velocity.get("category"),
+            "sales_per_day": velocity.get("sales_per_day"),
+            "est_days_to_sell": velocity.get("est_days_to_sell"),
+        },
+        "risk": {
+            "score": risk.get("score"),
+            "category": risk.get("category"),
+        },
+        "confidence": {
+            "score": confidence.get("score"),
+            "category": confidence.get("category"),
+        },
+        "competition": {
+            "score": competition.get("score"),
+            "level": competition.get("level"),
+        } if competition else None,
+        "trend": {
+            "demand_trend": trend.get("demand_trend"),
+            "price_trend": trend.get("price_trend"),
+        } if trend else None,
+        "opportunity_score": mp_engines.get("opportunity_score"),
+        "recommendation": mp_engines.get("recommendation"),
+    }
+
+
 @router.post("/", response_model=AnalysisResponse)
 async def analyze_product(
     request: Request,
@@ -311,22 +383,31 @@ async def get_shared_analysis(
             "confidence": confidence.get("category", "medium"),
         }
 
-    cleaned = engines.get("cleaned_comps", {})
-    ebay_analysis = None
-    if cleaned:
-        ebay_analysis = {
-            "marketplace": "ebay",
-            "comps": {
-                "total_sold": cleaned.get("clean_total", 0),
-                "median_price": cleaned.get("median_price", 0),
-                "p25": cleaned.get("p25", 0),
-                "p75": cleaned.get("p75", 0),
-                "sales_per_day": velocity.get("sales_per_day", 0),
-                "days_of_data": cleaned.get("days_of_data", 0),
-            },
-            "velocity": {"score": velocity.get("score"), "category": velocity.get("category")},
-            "confidence": {"score": confidence.get("score"), "category": confidence.get("category")},
-        }
+    marketplace_engines = engines.get("marketplace_engines", {})
+    ebay_analysis = _reconstruct_marketplace_analysis(
+        marketplace_engines.get("ebay"), "ebay",
+    )
+    amazon_analysis = _reconstruct_marketplace_analysis(
+        marketplace_engines.get("amazon"), "amazon",
+    )
+
+    # Fallback for analyses saved before marketplace_engines was added
+    if ebay_analysis is None and not marketplace_engines:
+        cleaned = engines.get("cleaned_comps", {})
+        if cleaned:
+            ebay_analysis = {
+                "marketplace": "ebay",
+                "comps": {
+                    "total_sold": cleaned.get("clean_total", 0),
+                    "median_price": cleaned.get("median_price", 0),
+                    "p25": cleaned.get("p25", 0),
+                    "p75": cleaned.get("p75", 0),
+                    "sales_per_day": velocity.get("sales_per_day", 0),
+                    "days_of_data": cleaned.get("days_of_data", 0),
+                },
+                "velocity": {"score": velocity.get("score"), "category": velocity.get("category")},
+                "confidence": {"score": confidence.get("score"), "category": confidence.get("category")},
+            }
 
     return {
         "id": a.id,
@@ -349,6 +430,8 @@ async def get_shared_analysis(
         "summary": summary,
         "ai_explanation": a.ai_explanation,
         "ebay_analysis": ebay_analysis,
+        "amazon_analysis": amazon_analysis,
+        "best_marketplace": engines.get("best_profit_marketplace"),
         "created_at": a.created_at.isoformat(),
     }
 
@@ -529,29 +612,38 @@ async def get_analysis_detail(
             "warnings": [],
         }
 
-    # Reconstruct ebay comps from engines_data
-    ebay_analysis = None
-    cleaned = engines.get("cleaned_comps", {})
-    if cleaned:
-        ebay_analysis = {
-            "marketplace": "ebay",
-            "comps": {
-                "total_sold": cleaned.get("clean_total", 0),
-                "median_price": cleaned.get("median_price", 0),
-                "p25": cleaned.get("p25", 0),
-                "p75": cleaned.get("p75", 0),
-                "sales_per_day": velocity.get("sales_per_day", 0),
-                "days_of_data": cleaned.get("days_of_data", 0),
-            },
-            "velocity": {
-                "score": velocity.get("score"),
-                "category": velocity.get("category"),
-            },
-            "confidence": {
-                "score": confidence.get("score"),
-                "category": confidence.get("category"),
-            },
-        }
+    # Reconstruct per-marketplace analyses from engines_data
+    marketplace_engines = engines.get("marketplace_engines", {})
+    ebay_analysis = _reconstruct_marketplace_analysis(
+        marketplace_engines.get("ebay"), "ebay",
+    )
+    amazon_analysis = _reconstruct_marketplace_analysis(
+        marketplace_engines.get("amazon"), "amazon",
+    )
+
+    # Fallback for analyses saved before marketplace_engines was added
+    if ebay_analysis is None and not marketplace_engines:
+        cleaned = engines.get("cleaned_comps", {})
+        if cleaned:
+            ebay_analysis = {
+                "marketplace": "ebay",
+                "comps": {
+                    "total_sold": cleaned.get("clean_total", 0),
+                    "median_price": cleaned.get("median_price", 0),
+                    "p25": cleaned.get("p25", 0),
+                    "p75": cleaned.get("p75", 0),
+                    "sales_per_day": velocity.get("sales_per_day", 0),
+                    "days_of_data": cleaned.get("days_of_data", 0),
+                },
+                "velocity": {
+                    "score": velocity.get("score"),
+                    "category": velocity.get("category"),
+                },
+                "confidence": {
+                    "score": confidence.get("score"),
+                    "category": confidence.get("category"),
+                },
+            }
 
     return {
         "id": a.id,
@@ -576,7 +668,9 @@ async def get_analysis_detail(
         "summary": summary,
         "ai_explanation": a.ai_explanation,
         "ebay_analysis": ebay_analysis,
-        "amazon_analysis": None,
+        "amazon_analysis": amazon_analysis,
+        "best_marketplace": engines.get("best_profit_marketplace"),
+        "recommended_marketplace": engines.get("recommended_marketplace"),
         "created_at": a.created_at.isoformat(),
     }
 
