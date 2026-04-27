@@ -22,17 +22,17 @@ stripe.api_version = "2025-04-30.basil"
 # Plan configuration — map price IDs to internal tier names
 # ---------------------------------------------------------------------------
 PLAN_CONFIG: dict[str, dict] = {
-    "basic": {
-        "name": "Basic",
-        "credits": 750,       # ~25/day
-        "daily_limit": 25,
-        "stripe_price_id": settings.stripe_price_basic,
+    "starter": {
+        "name": "Starter",
+        "credits": 900,       # ~30/day
+        "daily_limit": 30,
+        "stripe_price_id": settings.stripe_price_starter,
     },
-    "premium": {
-        "name": "Premium",
+    "pro": {
+        "name": "Pro",
         "credits": 3000,      # ~100/day
         "daily_limit": 100,
-        "stripe_price_id": settings.stripe_price_premium,
+        "stripe_price_id": settings.stripe_price_pro,
     },
 }
 
@@ -52,8 +52,8 @@ def register_price(price_id: str, plan: str) -> None:
 
 
 def plan_for_price(price_id: str) -> str:
-    """Resolve plan name from price_id, default to 'basic'."""
-    return _price_to_plan.get(price_id, "basic")
+    """Resolve plan name from price_id, default to 'starter'."""
+    return _price_to_plan.get(price_id, "starter")
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +145,7 @@ async def change_subscription_plan(
     # Determine if upgrade or downgrade
     current_plan = db_sub.plan
     new_plan = plan_for_price(new_price_id)
-    plan_order = {"basic": 1, "premium": 2}
+    plan_order = {"starter": 1, "pro": 2}
     is_upgrade = plan_order.get(new_plan, 0) > plan_order.get(current_plan, 0)
 
     # Fetch subscription from Stripe
@@ -366,7 +366,7 @@ async def _upsert_subscription(
 
 def _set_credits(user: User, tier: str) -> None:
     """Set credits_remaining based on tier."""
-    credits_map = {"free": 150, "basic": 750, "premium": 3000}
+    credits_map = {"free": 150, "starter": 900, "pro": 3000}
     user.credits_remaining = credits_map.get(tier, 150)
 
 

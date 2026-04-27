@@ -65,8 +65,8 @@ class Settings(BaseSettings):
     stripe_secret_key: str = ""
     stripe_publishable_key: str = ""
     stripe_webhook_secret: str = ""
-    stripe_price_basic: str = ""
-    stripe_price_premium: str = ""
+    stripe_price_starter: str = ""
+    stripe_price_pro: str = ""
 
     # AI — Gemini preferido, OpenAI fallback
     gemini_api_key: str = ""

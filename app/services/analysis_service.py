@@ -1462,25 +1462,41 @@ async def run_analysis_progressive(
         final_score=final_score,
     )
 
-    explanation_task = asyncio.create_task(generate_explanation(
-        keyword=kw,
-        cost_price=cost_price,
-        marketplace=primary.marketplace_name,
-        pricing=primary.pricing,
-        profit_market=primary.profit_market,
-        max_buy=primary.max_buy,
-        velocity=primary.velocity,
-        risk=primary.risk,
-        confidence=primary.confidence,
-        competition=primary.competition,
-        trend=primary.trend,
-        listing=primary.listing,
-        opportunity_score=primary.opportunity,
-        recommendation=primary.recommendation,
-        cleaned_total=primary.cleaned.clean_total,
-        raw_total=primary.cleaned.raw_total,
-        comparison_text=(comparison_text or "") + execution_text,
-    ))
+    # Determine user tier for AI gating
+    _user_tier = "free"
+    if user_id:
+        try:
+            from app.models.user import User as _UserModel
+            _user_obj = await db.get(_UserModel, user_id)
+            if _user_obj:
+                _user_tier = _user_obj.tier
+        except Exception:
+            pass
+
+    # AI explanation: only for paying tiers (starter, pro)
+    _ai_unlocked = _user_tier in ("starter", "pro")
+
+    explanation_task = None
+    if _ai_unlocked:
+        explanation_task = asyncio.create_task(generate_explanation(
+            keyword=kw,
+            cost_price=cost_price,
+            marketplace=primary.marketplace_name,
+            pricing=primary.pricing,
+            profit_market=primary.profit_market,
+            max_buy=primary.max_buy,
+            velocity=primary.velocity,
+            risk=primary.risk,
+            confidence=primary.confidence,
+            competition=primary.competition,
+            trend=primary.trend,
+            listing=primary.listing,
+            opportunity_score=primary.opportunity,
+            recommendation=primary.recommendation,
+            cleaned_total=primary.cleaned.clean_total,
+            raw_total=primary.cleaned.raw_total,
+            comparison_text=(comparison_text or "") + execution_text,
+        ))
 
     intel_task = None
     if mode == "premium" and primary.cleaned.clean_total > 0:
@@ -1774,6 +1790,7 @@ async def run_analysis_progressive(
         channels=channels,
         summary=summary,
         ai_explanation=None,
+        ai_locked=not _ai_unlocked,
         market_intelligence=None,
         detected_category=category_result.category if category_result else None,
         category_confidence=category_result.confidence if category_result else None,
@@ -1804,11 +1821,12 @@ async def run_analysis_progressive(
         {"mode": mode, "has_market_intelligence": bool(intel_task)},
     )
     _t0 = time.perf_counter()
-    try:
-        ai_explanation = await explanation_task
-    except Exception as e:
-        logger.warning("AI explanation failed: %s", e)
-        ai_explanation = None
+    ai_explanation = None
+    if explanation_task is not None:
+        try:
+            ai_explanation = await explanation_task
+        except Exception as e:
+            logger.warning("AI explanation failed: %s", e)
 
     market_intel = None
     if intel_task is not None:

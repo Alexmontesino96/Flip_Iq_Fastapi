@@ -27,14 +27,14 @@ class TestSetCredits:
         _set_credits(user, "free")
         assert user.credits_remaining == 150
 
-    def test_basic_tier(self):
+    def test_starter_tier(self):
         user = MagicMock()
-        _set_credits(user, "basic")
-        assert user.credits_remaining == 750
+        _set_credits(user, "starter")
+        assert user.credits_remaining == 900
 
-    def test_premium_tier(self):
+    def test_pro_tier(self):
         user = MagicMock()
-        _set_credits(user, "premium")
+        _set_credits(user, "pro")
         assert user.credits_remaining == 3000
 
     def test_unknown_tier_defaults_to_free(self):
@@ -60,11 +60,11 @@ class TestTimestamp:
 
 class TestPlanForPrice:
     def test_registered_price(self):
-        register_price("price_test_123", "premium")
-        assert plan_for_price("price_test_123") == "premium"
+        register_price("price_test_123", "pro")
+        assert plan_for_price("price_test_123") == "pro"
 
-    def test_unknown_price_defaults_to_basic(self):
-        assert plan_for_price("price_unknown_xyz") == "basic"
+    def test_unknown_price_defaults_to_starter(self):
+        assert plan_for_price("price_unknown_xyz") == "starter"
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +91,7 @@ class TestGetSubscriptionStatus:
         sub_mock = MagicMock()
         sub_mock.stripe_subscription_id = "sub_123"
         sub_mock.status = "active"
-        sub_mock.plan = "basic"
+        sub_mock.plan = "starter"
         sub_mock.current_period_end = datetime(2026, 5, 20, tzinfo=timezone.utc)
         sub_mock.cancel_at_period_end = False
 
@@ -101,7 +101,7 @@ class TestGetSubscriptionStatus:
 
         result = await get_subscription_status(user, db)
         assert result is not None
-        assert result["plan"] == "basic"
+        assert result["plan"] == "starter"
         assert result["status"] == "active"
         assert result["cancel_at_period_end"] is False
 
@@ -117,7 +117,6 @@ class TestWebhookHandling:
         event = MagicMock()
         event.type = "some.unknown.event"
         db = AsyncMock()
-        # Should not raise
         await handle_webhook_event(event, db)
 
     @pytest.mark.asyncio
@@ -125,11 +124,10 @@ class TestWebhookHandling:
         """checkout.session.completed with mode != subscription is ignored."""
         event = MagicMock()
         event.type = "checkout.session.completed"
-        event.data.object.mode = "payment"  # not subscription
+        event.data.object.mode = "payment"
 
         db = AsyncMock()
         await handle_webhook_event(event, db)
-        # No DB calls expected
         db.execute.assert_not_called()
 
     @pytest.mark.asyncio
@@ -145,7 +143,7 @@ class TestWebhookHandling:
         sub_mock.status = "active"
 
         user_mock = MagicMock()
-        user_mock.tier = "basic"
+        user_mock.tier = "starter"
 
         db = AsyncMock()
         result_mock = MagicMock()
@@ -184,11 +182,11 @@ class TestBillingSchemas:
         from app.schemas.billing import SubscriptionStatus
         status = SubscriptionStatus(
             has_subscription=True,
-            plan="basic",
+            plan="starter",
             status="active",
             current_period_end="2026-05-20T00:00:00+00:00",
             cancel_at_period_end=False,
             stripe_customer_id="cus_123",
         )
-        assert status.plan == "basic"
+        assert status.plan == "starter"
         assert status.stripe_customer_id == "cus_123"

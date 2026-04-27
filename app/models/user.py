@@ -15,7 +15,7 @@ class User(Base):
     hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
     full_name: Mapped[str | None] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    tier: Mapped[str] = mapped_column(String(20), default="free")  # free|basic|premium
+    tier: Mapped[str] = mapped_column(String(20), default="free")  # free|starter|pro
     credits_remaining: Mapped[int] = mapped_column(Integer, default=150)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

@@ -344,6 +344,7 @@ class AnalysisResponse(BaseModel):
     # Resumen ejecutivo
     summary: AnalysisSummary | None = None
     ai_explanation: str | None = None
+    ai_locked: bool = False  # True when user tier doesn't include AI explanation
     market_intelligence: MarketIntelligenceOut | None = None
 
     # Categorización de producto
