@@ -82,10 +82,29 @@ async def get_current_user(
 
     if user is None:
         email = payload.get("email", "")
-        user = User(supabase_id=supabase_id, email=email)
-        db.add(user)
-        await db.commit()
-        await db.refresh(user)
+        try:
+            user = User(supabase_id=supabase_id, email=email)
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+            logger.info("Auto-created user: id=%s email=%s", user.id, email)
+        except Exception as e:
+            await db.rollback()
+            logger.warning("User creation failed, retrying lookup: %s", e)
+            # Race condition: another request created the user first
+            result = await db.execute(
+                select(User).where(User.supabase_id == supabase_id)
+            )
+            user = result.scalar_one_or_none()
+            if user is None:
+                logger.error(
+                    "User creation failed and no user found for supabase_id=%s email=%s: %s",
+                    supabase_id, email, e,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to create user account",
+                )
 
     return user
 
@@ -94,10 +113,18 @@ async def get_current_user_optional(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User | None:
+    """Resolve user from JWT. Returns None ONLY if no token is present.
+
+    If a token IS present but user resolution fails, this still raises
+    to prevent analyses from being saved without a user_id.
+    """
     if not token:
         return None
     try:
         return await get_current_user(token=token, db=db)
     except HTTPException as e:
-        logger.warning("Auth optional failed: %s (token starts with: %s...)", e.detail, token[:20] if token else "")
-        return None
+        if e.status_code == 401:
+            logger.warning("Auth optional: invalid token (%s)", e.detail)
+            return None
+        # 500 errors (user creation failed) should propagate
+        raise
