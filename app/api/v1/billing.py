@@ -67,7 +67,7 @@ _PLAN_CATALOG = [
         "tag": None,
         "ai_unlocked": False,
         "features": [
-            "eBay comps only",
+            "eBay + Amazon comps",
             "Keyword search",
             "Basic flip score",
             "1 watchlist",
