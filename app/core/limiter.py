@@ -34,6 +34,8 @@ limiter = Limiter(
 # ---------------------------------------------------------------------------
 ANON_LIMIT = 5        # 5 total, never resets
 TTL_24H = 86400
+TTL_30D = 2592000     # used by waitlist_route
+VERIFIED_LIMIT = 100  # used by waitlist_route (legacy)
 
 # Daily scan limits per tier (authenticated users)
 TIER_DAILY_LIMITS: dict[str, int] = {
