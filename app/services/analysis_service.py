@@ -311,17 +311,18 @@ def _run_pipeline(
 
     # Fee rate from config (category-specific)
     fee_override = config.fee_rate if config else None
+    fee_fixed_override = config.fee_fixed if config else None
 
     # Motor C: Profit
     profit_market = compute_profit(
         pricing.market_list, cost_price, marketplace_name,
         shipping_cost, packaging_cost, prep_cost, promo_cost, return_reserve_pct,
-        fee_rate_override=fee_override,
+        fee_rate_override=fee_override, fee_fixed_override=fee_fixed_override,
     )
     profit_quick = compute_profit(
         pricing.quick_list, cost_price, marketplace_name,
         shipping_cost, packaging_cost, prep_cost, promo_cost, return_reserve_pct,
-        fee_rate_override=fee_override,
+        fee_rate_override=fee_override, fee_fixed_override=fee_fixed_override,
     )
 
     # Motor D: Max buy price
@@ -364,7 +365,7 @@ def _run_pipeline(
         subset_profit = compute_profit(
             cleaned.condition_subset_median, cost_price, marketplace_name,
             shipping_cost, packaging_cost, prep_cost, promo_cost, return_reserve_pct,
-            fee_rate_override=fee_override,
+            fee_rate_override=fee_override, fee_fixed_override=fee_fixed_override,
         )
         subset_max_buy = compute_max_buy(subset_profit, target_profit, target_roi)
         condition_subset_pricing = {

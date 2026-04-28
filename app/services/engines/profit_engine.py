@@ -5,13 +5,14 @@ Calcula rentabilidad neta real con todos los costos del revendedor.
 
 from dataclasses import dataclass
 
-from app.core.fees import MARKETPLACE_FEE_RATES
+from app.core.fees import MARKETPLACE_FEE_FIXED, MARKETPLACE_FEE_RATES
 
 
 @dataclass
 class ProfitResult:
     sale_price: float
     fee_rate: float
+    fee_fixed: float
     marketplace_fees: float
     shipping_cost: float
     packaging_cost: float
@@ -35,10 +36,12 @@ def compute_profit(
     promo_cost: float = 0.0,
     return_reserve_pct: float = 0.05,
     fee_rate_override: float | None = None,
+    fee_fixed_override: float | None = None,
 ) -> ProfitResult:
     """Calcula profit neto considerando todos los costos reales."""
     fee_rate = fee_rate_override if fee_rate_override is not None else MARKETPLACE_FEE_RATES.get(marketplace, 0.1325)
-    marketplace_fees = sale_price * fee_rate
+    fee_fixed = fee_fixed_override if fee_fixed_override is not None else MARKETPLACE_FEE_FIXED.get(marketplace, 0.0)
+    marketplace_fees = sale_price * fee_rate + fee_fixed
     return_reserve = sale_price * return_reserve_pct
 
     gross_proceeds = (
@@ -57,6 +60,7 @@ def compute_profit(
     return ProfitResult(
         sale_price=round(sale_price, 2),
         fee_rate=fee_rate,
+        fee_fixed=round(fee_fixed, 2),
         marketplace_fees=round(marketplace_fees, 2),
         shipping_cost=round(shipping_cost, 2),
         packaging_cost=round(packaging_cost, 2),

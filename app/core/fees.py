@@ -78,6 +78,11 @@ MARKETPLACE_FEE_RATES = {
     "amazon_fba": 0.15,
 }
 
+MARKETPLACE_FEE_FIXED = {
+    "ebay": 0.0,
+    "amazon_fba": 3.50,
+}
+
 
 MARKETPLACE_CALCULATORS = {
     "ebay": ebay_fees,

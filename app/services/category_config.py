@@ -13,6 +13,8 @@ from datetime import date
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.fees import MARKETPLACE_FEE_FIXED, MARKETPLACE_FEE_RATES
+
 logger = logging.getLogger("flipiq.category_config")
 
 # ---------------------------------------------------------------------------
@@ -167,6 +169,12 @@ async def resolve_config(
     merged = dict(GLOBAL_DEFAULTS)
     merged["channel"] = channel
     config_source = "global"
+
+    # Apply marketplace-specific fee defaults (overrides the eBay-centric global)
+    if channel in MARKETPLACE_FEE_RATES:
+        merged["fee_rate"] = MARKETPLACE_FEE_RATES[channel]
+    if channel in MARKETPLACE_FEE_FIXED:
+        merged["fee_fixed"] = MARKETPLACE_FEE_FIXED[channel]
 
     if not category_slug or db is None:
         merged["category_slug"] = category_slug

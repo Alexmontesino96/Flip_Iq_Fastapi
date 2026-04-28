@@ -49,8 +49,10 @@ def _reconstruct_marketplace_analysis(
     max_buy = mp_engines.get("max_buy", {})
     competition = mp_engines.get("competition", {})
     trend = mp_engines.get("trend", {})
+    estimated_sale = pricing.get("market_list") if pricing else None
     return {
         "marketplace": marketplace,
+        "estimated_sale_price": estimated_sale,
         "comps": {
             "total_sold": cleaned.get("clean_total", 0),
             "median_price": cleaned.get("median_price", 0),
