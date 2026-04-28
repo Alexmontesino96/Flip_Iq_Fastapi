@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     # Supabase Auth
     supabase_url: str = ""
     supabase_jwt_secret: str = ""
+    supabase_service_role_key: str = ""
 
     # Rate limiting
     rate_limit_per_minute: int = 60
