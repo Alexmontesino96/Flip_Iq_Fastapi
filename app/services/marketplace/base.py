@@ -75,6 +75,9 @@ class CompsResult:
     sales_by_date: list[SalesByDate] = field(default_factory=list)
     # Enrichment
     image_url: str | None = None
+    # Amazon FBA fees from Keepa (product-level, not estimated)
+    fba_referral_pct: float | None = None   # e.g. 0.15 for 15%
+    fba_fulfillment_fee: float | None = None  # e.g. 3.22 (pick & pack)
     # Data quality / scraper diagnostics (optional, does not affect core stats)
     query_used: str | None = None
     scrape_source: str | None = None

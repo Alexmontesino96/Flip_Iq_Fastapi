@@ -52,6 +52,13 @@ def estimate_sales_per_day(sales_rank: int | None) -> float:
 MAX_REASONABLE_PRICE = 5000.0  # Cap de sanidad — filtrar precios > $5,000
 
 
+def _extract_brand_model(product: dict) -> tuple[str | None, str | None]:
+    """Extrae brand y model del producto Keepa."""
+    brand = product.get("brand") or None
+    model = product.get("model") or product.get("partNumber") or None
+    return brand, model
+
+
 def _map_keepa_offers(product: dict) -> list[MarketplaceListing]:
     """Convierte ofertas de sellers de Keepa a MarketplaceListing.
 
@@ -61,6 +68,7 @@ def _map_keepa_offers(product: dict) -> list[MarketplaceListing]:
     offers = product.get("offers") or []
     title = product.get("title", "")
     asin = product.get("asin", "")
+    brand, model = _extract_brand_model(product)
 
     for offer in offers:
         csv = offer.get("offerCSV", [])
@@ -104,6 +112,8 @@ def _map_keepa_offers(product: dict) -> list[MarketplaceListing]:
             total_price=round(price_val + shipping, 2),
             ended_at=datetime.now(timezone.utc),
             seller_username=seller,
+            brand=brand,
+            model=model,
         ))
 
     return listings
@@ -118,6 +128,7 @@ def _map_buybox_history(product: dict, days: int = 30) -> list[MarketplaceListin
     csv_data = product.get("csv") or []
     title = product.get("title", "")
     asin = product.get("asin", "")
+    brand, model = _extract_brand_model(product)
 
     if len(csv_data) <= CSV_BUY_BOX:
         return listings
@@ -159,6 +170,8 @@ def _map_buybox_history(product: dict, days: int = 30) -> list[MarketplaceListin
             total_price=round(price + shipping, 2),
             ended_at=dt,
             seller_username="Amazon Buy Box",
+            brand=brand,
+            model=model,
         ))
 
     return listings
@@ -333,10 +346,13 @@ class AmazonClient(MarketplaceClient):
                 products = filtered_products
             # Si filtrar deja 0 productos, no filtrar (datos incompletos > sin datos)
 
-        # Mapear productos a listings
+        # Mapear productos a listings + extraer fees reales de Keepa
         all_listings: list[MarketplaceListing] = []
         best_rank: int | None = None
         image_url: str | None = None
+        # Collect per-product FBA fees from Keepa
+        referral_pcts: list[float] = []
+        fulfillment_fees: list[float] = []
 
         for product in products:
             # Ofertas actuales de sellers
@@ -360,6 +376,19 @@ class AmazonClient(MarketplaceClient):
                     if first_hash:
                         image_url = f"https://images-na.ssl-images-amazon.com/images/I/{first_hash}"
 
+            # Extract real Amazon FBA fees from Keepa product data
+            # referralFeePercentage: integer 0-100 (e.g. 15 = 15%)
+            ref_pct = product.get("referralFeePercentage")
+            if ref_pct is not None and ref_pct > 0:
+                referral_pcts.append(ref_pct / 100.0)
+
+            # fbaFees.pickAndPackFee: integer in cents (e.g. 322 = $3.22)
+            fba_fees = product.get("fbaFees")
+            if fba_fees and isinstance(fba_fees, dict):
+                pick_pack = fba_fees.get("pickAndPackFee")
+                if pick_pack is not None and pick_pack > 0:
+                    fulfillment_fees.append(pick_pack / 100.0)
+
         if not all_listings:
             logger.info("Keepa: productos encontrados pero sin listings mapeables")
             return CompsResult(marketplace="amazon")
@@ -369,6 +398,23 @@ class AmazonClient(MarketplaceClient):
 
         result = CompsResult.from_listings(all_listings, marketplace="amazon", days=days)
         result.image_url = image_url
+
+        # Apply real Keepa fees if available
+        if referral_pcts:
+            result.fba_referral_pct = round(
+                sum(referral_pcts) / len(referral_pcts), 4,
+            )
+        if fulfillment_fees:
+            result.fba_fulfillment_fee = round(
+                sum(fulfillment_fees) / len(fulfillment_fees), 2,
+            )
+        if referral_pcts or fulfillment_fees:
+            logger.info(
+                "Keepa fees: referral=%.1f%%, fulfillment=$%.2f (from %d products)",
+                (result.fba_referral_pct or 0) * 100,
+                result.fba_fulfillment_fee or 0,
+                len(products),
+            )
 
         # Sobreescribir sales_per_day con estimación de BSR (más precisa que contar listings)
         if best_rank:

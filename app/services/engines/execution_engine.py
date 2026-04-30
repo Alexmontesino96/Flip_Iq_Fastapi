@@ -110,7 +110,9 @@ def compute_execution(
 
     # Amazon/FBA-specific execution risk.
     if marketplace_name == "amazon_fba":
-        add("generic_fba_fees", "medium", 8, "Amazon FBA fees are generic estimates.")
+        has_real_fees = raw_comps.fba_referral_pct is not None or raw_comps.fba_fulfillment_fee is not None
+        if not has_real_fees:
+            add("generic_fba_fees", "medium", 8, "Amazon FBA fees are generic estimates.")
         if dominant >= 0.80:
             add("low_buy_box_access", "high", 8, "Buy Box access is likely difficult for new inventory.")
 

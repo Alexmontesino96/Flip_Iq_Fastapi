@@ -309,9 +309,13 @@ def _run_pipeline(
     # Motor B: Precios recomendados
     pricing = compute_pricing(cleaned, config=config)
 
-    # Fee rate from config (category-specific)
+    # Fee rate: prefer real Keepa fees > config (category) > marketplace default
     fee_override = config.fee_rate if config else None
     fee_fixed_override = config.fee_fixed if config else None
+    if raw_comps.fba_referral_pct is not None:
+        fee_override = raw_comps.fba_referral_pct
+    if raw_comps.fba_fulfillment_fee is not None:
+        fee_fixed_override = raw_comps.fba_fulfillment_fee
 
     # Motor C: Profit
     profit_market = compute_profit(
@@ -415,9 +419,10 @@ def _run_pipeline(
             "Pricing confidence is limited."
         )
     if marketplace_name == "amazon_fba" and cleaned.clean_total > 0:
-        warnings.append(
-            "Amazon FBA fees use a generic estimate; confirm category and fulfillment costs before buying."
-        )
+        if raw_comps.fba_referral_pct is None and raw_comps.fba_fulfillment_fee is None:
+            warnings.append(
+                "Amazon FBA fees use a generic estimate; confirm category and fulfillment costs before buying."
+            )
 
     # Warning: mercado dominado por un seller
     if competition.dominant_seller_share > 0.40:
