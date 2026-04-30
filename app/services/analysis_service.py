@@ -309,13 +309,18 @@ def _run_pipeline(
     # Motor B: Precios recomendados
     pricing = compute_pricing(cleaned, config=config)
 
-    # Fee rate: prefer real Keepa fees > config (category) > marketplace default
-    fee_override = config.fee_rate if config else None
-    fee_fixed_override = config.fee_fixed if config else None
-    if raw_comps.fba_referral_pct is not None:
-        fee_override = raw_comps.fba_referral_pct
-    if raw_comps.fba_fulfillment_fee is not None:
-        fee_fixed_override = raw_comps.fba_fulfillment_fee
+    # Fee resolution: Keepa real fees > config bracket (price-aware) > marketplace default
+    # Resolve fee bracket based on actual sale price (after pricing is known)
+    if raw_comps.fba_referral_pct is not None or raw_comps.fba_fulfillment_fee is not None:
+        # Real Keepa fees take priority
+        fee_override = raw_comps.fba_referral_pct if raw_comps.fba_referral_pct is not None else (config.fee_rate if config else None)
+        fee_fixed_override = raw_comps.fba_fulfillment_fee if raw_comps.fba_fulfillment_fee is not None else (config.fee_fixed if config else None)
+    elif config:
+        # Resolve bracket by actual sale price (handles eBay price-dependent fees)
+        fee_override, fee_fixed_override = config.resolve_fee_for_price(pricing.market_list)
+    else:
+        fee_override = None
+        fee_fixed_override = None
 
     # Motor C: Profit
     profit_market = compute_profit(
@@ -323,10 +328,15 @@ def _run_pipeline(
         shipping_cost, packaging_cost, prep_cost, promo_cost, return_reserve_pct,
         fee_rate_override=fee_override, fee_fixed_override=fee_fixed_override,
     )
+    # Quick price may fall in a different bracket
+    if config and not (raw_comps.fba_referral_pct is not None or raw_comps.fba_fulfillment_fee is not None):
+        fee_quick, fee_fixed_quick = config.resolve_fee_for_price(pricing.quick_list)
+    else:
+        fee_quick, fee_fixed_quick = fee_override, fee_fixed_override
     profit_quick = compute_profit(
         pricing.quick_list, cost_price, marketplace_name,
         shipping_cost, packaging_cost, prep_cost, promo_cost, return_reserve_pct,
-        fee_rate_override=fee_override, fee_fixed_override=fee_fixed_override,
+        fee_rate_override=fee_quick, fee_fixed_override=fee_fixed_quick,
     )
 
     # Motor D: Max buy price
@@ -366,10 +376,13 @@ def _run_pipeline(
         and cleaned.condition_subset_median is not None
         and cleaned.condition_subset_median > 0
     ):
+        sub_fee, sub_fee_fixed = (fee_override, fee_fixed_override)
+        if config and not (raw_comps.fba_referral_pct is not None or raw_comps.fba_fulfillment_fee is not None):
+            sub_fee, sub_fee_fixed = config.resolve_fee_for_price(cleaned.condition_subset_median)
         subset_profit = compute_profit(
             cleaned.condition_subset_median, cost_price, marketplace_name,
             shipping_cost, packaging_cost, prep_cost, promo_cost, return_reserve_pct,
-            fee_rate_override=fee_override, fee_fixed_override=fee_fixed_override,
+            fee_rate_override=sub_fee, fee_fixed_override=sub_fee_fixed,
         )
         subset_max_buy = compute_max_buy(subset_profit, target_profit, target_roi)
         condition_subset_pricing = {
@@ -1608,23 +1621,21 @@ async def run_analysis_progressive(
                     continue
                 if pipeline.marketplace_name not in MARKETPLACE_CALCULATORS:
                     continue
+                # Use the pipeline's own profit calculation (already has correct
+                # category/bracket fees from _run_pipeline) instead of recalculating
+                # with flat MARKETPLACE_CALCULATORS.
+                p = pipeline.profit_market
                 sale = pipeline.pricing.market_list
                 for i, ch in enumerate(channels):
                     if ch.marketplace != pipeline.marketplace_name:
                         continue
-                    fees = MARKETPLACE_CALCULATORS[pipeline.marketplace_name](Decimal(str(sale)))
-                    gross = fees["net_proceeds"]
-                    net = gross - shipping_cost - packaging_cost - promo_cost
-                    ret_reserve = sale * return_reserve_pct
-                    profit = net - ret_reserve - cost_price - prep_cost
-                    invested = cost_price + prep_cost
                     channels[i] = ChannelBreakdown(
                         marketplace=pipeline.marketplace_name,
                         estimated_sale_price=sale,
-                        net_proceeds=round(net - ret_reserve, 2),
-                        profit=round(profit, 2),
-                        roi_pct=round(profit / invested * 100, 2) if invested > 0 else 0,
-                        margin_pct=round(profit / sale * 100, 2) if sale > 0 else 0,
+                        net_proceeds=round(p.risk_adjusted_net, 2),
+                        profit=round(p.profit, 2),
+                        roi_pct=round(p.roi * 100, 2) if math.isfinite(p.roi) else 0,
+                        margin_pct=round(p.margin * 100, 2) if math.isfinite(p.margin) else 0,
                         is_estimated=False,
                     )
                     break

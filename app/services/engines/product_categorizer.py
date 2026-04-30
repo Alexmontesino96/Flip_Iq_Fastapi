@@ -41,6 +41,16 @@ EBAY_CATEGORIES: dict[int, str] = {
     3034: "Power Tools",
     11071: "Golf Clubs",
     15724: "Bicycles",
+    # Categories with non-standard eBay fees
+    619: "Musical Instruments & Gear",
+    180014: "Guitars & Basses",
+    3411: "Coins & Paper Money",
+    281: "Jewelry & Watches",
+    260324: "Fine Jewelry",
+    177641: "Heavy Equipment",
+    12576: "Business & Industrial",
+    6000: "Auto Parts & Accessories",
+    6028: "Car & Truck Parts",
 }
 
 _CATEGORY_LIST = "\n".join(f"  {cid}: {name}" for cid, name in EBAY_CATEGORIES.items())

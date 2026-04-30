@@ -80,17 +80,28 @@ GLOBAL_DEFAULTS: dict[str, object] = {
 
 
 # ---------------------------------------------------------------------------
-# ResolvedConfig — the product of merging 3 levels
+# FeeBracket + ResolvedConfig
 # ---------------------------------------------------------------------------
+
+@dataclass
+class FeeBracket:
+    """A single fee schedule bracket (price-dependent)."""
+    fee_rate: float
+    fee_fixed: float = 0.0
+    price_min: float | None = None
+    price_max: float | None = None
+    fee_note: str | None = None
+
 
 @dataclass
 class ResolvedConfig:
     """Fully resolved configuration for a single analysis run."""
 
-    # Fees
+    # Fees (defaults — overridden by fee_brackets when available)
     fee_rate: float = 0.1325
     fee_fixed: float = 0.0
     fee_note: str | None = None
+    fee_brackets: list[FeeBracket] = field(default_factory=list)
     # Profit
     return_reserve_pct: float = 0.05
     shipping_cost: float = 0.0
@@ -144,6 +155,20 @@ class ResolvedConfig:
     config_source: str = "global"  # "global" | "category" | "channel"
     observation_mode: bool = False
 
+    def resolve_fee_for_price(self, sale_price: float) -> tuple[float, float]:
+        """Return (fee_rate, fee_fixed) for a given sale price.
+
+        Searches fee_brackets for the best match.  Falls back to
+        self.fee_rate / self.fee_fixed when no bracket matches.
+        """
+        if not self.fee_brackets:
+            return self.fee_rate, self.fee_fixed
+        for b in self.fee_brackets:
+            if (b.price_min is None or sale_price >= b.price_min) and \
+               (b.price_max is None or sale_price <= b.price_max):
+                return b.fee_rate, b.fee_fixed
+        return self.fee_rate, self.fee_fixed
+
 
 def _build_config(merged: dict) -> ResolvedConfig:
     """Build a ResolvedConfig from a merged dict, ignoring unknown keys."""
@@ -159,7 +184,7 @@ def _build_config(merged: dict) -> ResolvedConfig:
 async def resolve_config(
     category_slug: str | None,
     channel: str = "ebay",
-    sale_price: float | None = None,
+    sale_price: float | None = None,  # deprecated — brackets resolve at pipeline time
     db: AsyncSession | None = None,
 ) -> ResolvedConfig:
     """Resolve a full config by merging global → category → channel levels.
@@ -214,54 +239,73 @@ async def resolve_config(
         merged.update(channel_config.engine_overrides)
         config_source = "channel"
 
-    # Fee schedule (most specific: category+channel+price bracket)
-    fee = await _resolve_fee(db, channel, category.id, sale_price)
-    if fee:
-        merged["fee_rate"] = float(fee["fee_rate"])
-        merged["fee_fixed"] = float(fee["fee_fixed"])
-        if fee.get("fee_note"):
-            merged["fee_note"] = fee["fee_note"]
+    # Fee schedule: load ALL brackets for this category+channel
+    brackets = await _load_fee_brackets(db, channel, category.id)
+    if brackets:
+        # Set default fee_rate/fee_fixed to the first bracket without price limits
+        # (or the first bracket overall as fallback)
+        default_bracket = next(
+            (b for b in brackets if b.price_min is None and b.price_max is None),
+            brackets[0],
+        )
+        merged["fee_rate"] = default_bracket.fee_rate
+        merged["fee_fixed"] = default_bracket.fee_fixed
+        if default_bracket.fee_note:
+            merged["fee_note"] = default_bracket.fee_note
 
     merged["config_source"] = config_source
-    return _build_config(merged)
+    config = _build_config(merged)
+    if brackets:
+        config.fee_brackets = brackets
+    return config
 
 
-async def _resolve_fee(
+async def _load_fee_brackets(
     db: AsyncSession,
     channel: str,
     category_id: int,
-    sale_price: float | None,
-) -> dict | None:
-    """Find the most specific fee schedule row for this channel+category+price."""
+) -> list[FeeBracket]:
+    """Load all fee schedule brackets for a category+channel.
+
+    Returns category-specific brackets if available, otherwise global
+    brackets for the channel.  Ordered: specific price ranges first,
+    then open-ended (no price_min/max).
+    """
     today = date.today()
 
-    # Query: category-specific first, then global fallback
     result = await db.execute(
         text("""
-            SELECT fee_rate, fee_fixed, fee_note, category_id
+            SELECT fee_rate, fee_fixed, fee_note, price_min, price_max, category_id
             FROM fee_schedules
             WHERE channel = :channel
               AND valid_from <= :today
               AND (valid_to IS NULL OR valid_to >= :today)
               AND (category_id = :cat_id OR category_id IS NULL)
-              AND (price_min IS NULL OR price_min <= :price)
-              AND (price_max IS NULL OR price_max >= :price)
             ORDER BY
                 category_id IS NULL ASC,
-                price_min IS NULL ASC
-            LIMIT 1
+                price_min IS NULL ASC,
+                price_min ASC NULLS LAST
         """),
-        {
-            "channel": channel,
-            "today": today,
-            "cat_id": category_id,
-            "price": sale_price or 0,
-        },
+        {"channel": channel, "today": today, "cat_id": category_id},
     )
-    row = result.first()
-    if row:
-        return dict(row._mapping)
-    return None
+    rows = result.fetchall()
+    if not rows:
+        return []
+
+    # If we have category-specific rows, use only those; otherwise globals
+    cat_rows = [r for r in rows if r._mapping["category_id"] is not None]
+    chosen = cat_rows if cat_rows else rows
+
+    return [
+        FeeBracket(
+            fee_rate=float(r._mapping["fee_rate"]),
+            fee_fixed=float(r._mapping["fee_fixed"]),
+            price_min=float(r._mapping["price_min"]) if r._mapping["price_min"] is not None else None,
+            price_max=float(r._mapping["price_max"]) if r._mapping["price_max"] is not None else None,
+            fee_note=r._mapping.get("fee_note"),
+        )
+        for r in chosen
+    ]
 
 
 # ---------------------------------------------------------------------------
