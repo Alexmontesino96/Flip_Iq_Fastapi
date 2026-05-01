@@ -287,12 +287,13 @@ async def _handle_subscription_deleted(event: stripe.Event, db: AsyncSession) ->
 async def _handle_payment_succeeded(event: stripe.Event, db: AsyncSession) -> None:
     """Invoice paid — reset daily credits for the billing period."""
     invoice = event.data.object
-    if not invoice.subscription:
+    subscription_id = getattr(invoice, "subscription", None)
+    if not subscription_id:
         return
 
     result = await db.execute(
         select(Subscription).where(
-            Subscription.stripe_subscription_id == invoice.subscription
+            Subscription.stripe_subscription_id == subscription_id
         )
     )
     db_sub = result.scalar_one_or_none()
@@ -311,8 +312,8 @@ async def _handle_payment_failed(event: stripe.Event, db: AsyncSession) -> None:
     invoice = event.data.object
     logger.warning(
         "Payment failed for customer %s, subscription %s",
-        invoice.customer,
-        invoice.subscription,
+        getattr(invoice, "customer", None),
+        getattr(invoice, "subscription", None),
     )
 
 
