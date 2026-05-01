@@ -194,9 +194,17 @@ async def handle_apple_notification(
 
 
 async def _find_user_by_apple_txn(
-    original_txn_id: str, db: AsyncSession,
+    original_txn_id: str,
+    db: AsyncSession,
+    txn: dict[str, Any] | None = None,
 ) -> User | None:
-    """Find user by Apple original transaction ID via subscriptions table."""
+    """Find user by Apple original transaction ID or appAccountToken.
+
+    Lookup order:
+    1. Subscription table (apple_original_transaction_id)
+    2. appAccountToken in transaction info (= supabase_id UUID)
+    """
+    # 1. Try subscription table first
     result = await db.execute(
         select(Subscription).where(
             Subscription.apple_original_transaction_id == original_txn_id
@@ -205,6 +213,22 @@ async def _find_user_by_apple_txn(
     sub = result.scalar_one_or_none()
     if sub:
         return await db.get(User, sub.user_id)
+
+    # 2. Try appAccountToken (supabase_id set by iOS app during purchase)
+    if txn:
+        app_account_token = txn.get("appAccountToken")
+        if app_account_token:
+            result = await db.execute(
+                select(User).where(User.supabase_id == str(app_account_token))
+            )
+            user = result.scalar_one_or_none()
+            if user:
+                logger.info(
+                    "Found user via appAccountToken: user=%s supabase_id=%s",
+                    user.id, app_account_token,
+                )
+                return user
+
     return None
 
 
@@ -289,16 +313,13 @@ async def _handle_subscribed(
     """SUBSCRIBED — new purchase or resubscribe."""
     original_txn_id = txn.get("originalTransactionId", "")
 
-    # Try to find user by existing subscription
-    user = await _find_user_by_apple_txn(original_txn_id, db)
+    # Find user by subscription table or appAccountToken (supabase_id)
+    user = await _find_user_by_apple_txn(original_txn_id, db, txn=txn)
 
-    # If no existing subscription, the user must sync via /apple-iap-sync first
-    # (which creates the initial link between user and transaction ID)
     if not user:
         logger.warning(
-            "Apple SUBSCRIBED but no user linked to txn=%s. "
-            "User must call /apple-iap-sync first.",
-            original_txn_id,
+            "Apple SUBSCRIBED but no user found for txn=%s appAccountToken=%s",
+            original_txn_id, txn.get("appAccountToken"),
         )
         return
 
@@ -310,7 +331,7 @@ async def _handle_renewed(
 ) -> None:
     """DID_RENEW — subscription successfully renewed."""
     user = await _find_user_by_apple_txn(
-        txn.get("originalTransactionId", ""), db,
+        txn.get("originalTransactionId", ""), db, txn=txn,
     )
     if not user:
         return
@@ -323,7 +344,7 @@ async def _handle_plan_change(
     """DID_CHANGE_RENEWAL_PREF — user changed plan (upgrade/downgrade)."""
     renewal = notification.get("_renewal", {})
     user = await _find_user_by_apple_txn(
-        txn.get("originalTransactionId", ""), db,
+        txn.get("originalTransactionId", ""), db, txn=txn,
     )
     if not user:
         return
@@ -353,7 +374,7 @@ async def _handle_renewal_status_change(
     renewal = notification.get("_renewal", {})
     auto_renew = renewal.get("autoRenewStatus", 1)
     user = await _find_user_by_apple_txn(
-        txn.get("originalTransactionId", ""), db,
+        txn.get("originalTransactionId", ""), db, txn=txn,
     )
     if not user:
         return
@@ -380,7 +401,7 @@ async def _handle_expired(
 ) -> None:
     """EXPIRED / GRACE_PERIOD_EXPIRED — subscription ended."""
     user = await _find_user_by_apple_txn(
-        txn.get("originalTransactionId", ""), db,
+        txn.get("originalTransactionId", ""), db, txn=txn,
     )
     if not user:
         return
@@ -393,7 +414,7 @@ async def _handle_failed_renew(
 ) -> None:
     """DID_FAIL_TO_RENEW — billing retry period."""
     user = await _find_user_by_apple_txn(
-        txn.get("originalTransactionId", ""), db,
+        txn.get("originalTransactionId", ""), db, txn=txn,
     )
     if not user:
         return
@@ -411,7 +432,7 @@ async def _handle_refund(
 ) -> None:
     """REFUND / REVOKE — Apple refunded or revoked access."""
     user = await _find_user_by_apple_txn(
-        txn.get("originalTransactionId", ""), db,
+        txn.get("originalTransactionId", ""), db, txn=txn,
     )
     if not user:
         return
