@@ -14,6 +14,7 @@ from app.core.security import get_current_user
 from app.database import get_db
 from app.models.user import User
 from app.schemas.billing import (
+    AppleIAPSyncRequest,
     CheckoutRequest,
     CheckoutResponse,
     PortalRequest,
@@ -212,6 +213,51 @@ async def get_status(
         plan=user.tier,
         stripe_customer_id=user.stripe_customer_id,
     )
+
+
+APPLE_PRODUCT_TO_TIER = {
+    "starter_monthly": "starter",
+    "pro_monthly": "pro",
+}
+
+TIER_CREDITS = {
+    "free": 150,
+    "starter": 900,
+    "pro": 3000,
+}
+
+
+@router.post("/apple-iap-sync")
+async def apple_iap_sync(
+    payload: AppleIAPSyncRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Sync Apple IAP subscription state with backend.
+
+    Called by iOS app after a StoreKit 2 purchase or cancellation.
+    Updates user tier and credits based on the Apple product ID.
+    """
+    if payload.action == "cancel":
+        user.tier = "free"
+        user.credits_remaining = TIER_CREDITS["free"]
+        await db.commit()
+        logger.info("Apple IAP cancel: user=%s → free", user.id)
+        return {"detail": "Tier updated to free", "tier": "free"}
+
+    tier = APPLE_PRODUCT_TO_TIER.get(payload.product_id)
+    if not tier:
+        raise HTTPException(status_code=400, detail=f"Unknown product: {payload.product_id}")
+
+    user.tier = tier
+    user.credits_remaining = TIER_CREDITS.get(tier, 150)
+    await db.commit()
+
+    logger.info(
+        "Apple IAP sync: user=%s product=%s → tier=%s",
+        user.id, payload.product_id, tier,
+    )
+    return {"detail": f"Tier updated to {tier}", "tier": tier}
 
 
 @router.post("/webhook")

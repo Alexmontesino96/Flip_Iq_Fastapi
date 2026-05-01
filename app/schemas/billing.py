@@ -21,6 +21,12 @@ class PortalResponse(BaseModel):
     portal_url: str
 
 
+class AppleIAPSyncRequest(BaseModel):
+    product_id: str  # e.g. "starter_monthly", "pro_monthly"
+    original_transaction_id: str
+    action: str = "purchase"  # "purchase" or "cancel"
+
+
 class SubscriptionStatus(BaseModel):
     has_subscription: bool
     plan: str  # free|starter|pro
