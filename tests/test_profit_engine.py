@@ -11,19 +11,20 @@ class TestProfitEngine:
             cost_price=50.0,
             marketplace="ebay",
         )
-        # eBay fee = 13.25%
+        # eBay fee = 13.25% + $0.30 per-order
         assert result.fee_rate == 0.1325
-        assert result.marketplace_fees == 13.25
-        # gross_proceeds = 100 - 13.25 - 0 - 0 - 0 = 86.75
-        assert result.gross_proceeds == 86.75
+        assert result.fee_fixed == 0.30
+        assert result.marketplace_fees == 13.55  # 100*0.1325 + 0.30
+        # gross_proceeds = 100 - 13.55 - 0 - 0 - 0 = 86.45
+        assert result.gross_proceeds == 86.45
         # return_reserve = 100 * 0.05 = 5.0
         assert result.return_reserve == 5.0
-        # risk_adjusted_net = 86.75 - 5.0 = 81.75
-        assert result.risk_adjusted_net == 81.75
-        # profit = 81.75 - 50 - 0 = 31.75
-        assert result.profit == 31.75
-        # roi = 31.75 / 50 = 0.635
-        assert result.roi == 0.635
+        # risk_adjusted_net = 86.45 - 5.0 = 81.45
+        assert result.risk_adjusted_net == 81.45
+        # profit = 81.45 - 50 - 0 = 31.45
+        assert result.profit == 31.45
+        # roi = 31.45 / 50 = 0.629
+        assert result.roi == 0.629
 
     def test_profit_with_all_costs(self):
         result = compute_profit(
@@ -36,14 +37,14 @@ class TestProfitEngine:
             promo_cost=3.0,
             return_reserve_pct=0.05,
         )
-        # gross_proceeds = 100 - 13.25 - 8 - 2 - 3 = 73.75
-        assert result.gross_proceeds == 73.75
-        # risk_adjusted_net = 73.75 - 5.0 = 68.75
-        assert result.risk_adjusted_net == 68.75
-        # profit = 68.75 - 40 - 5 = 23.75
-        assert result.profit == 23.75
-        # roi = 23.75 / (40 + 5) = 0.5278
-        assert abs(result.roi - 0.5278) < 0.001
+        # gross_proceeds = 100 - 13.55 - 8 - 2 - 3 = 73.45
+        assert result.gross_proceeds == 73.45
+        # risk_adjusted_net = 73.45 - 5.0 = 68.45
+        assert result.risk_adjusted_net == 68.45
+        # profit = 68.45 - 40 - 5 = 23.45
+        assert result.profit == 23.45
+        # roi = 23.45 / (40 + 5) = 0.5211
+        assert abs(result.roi - 0.5211) < 0.001
 
     def test_negative_profit(self):
         result = compute_profit(
@@ -98,12 +99,12 @@ class TestMaxBuyPrice:
         )
         result = compute_max_buy(profit, target_profit=10.0, target_roi=0.35)
 
-        # available = risk_adjusted_net - prep_cost = 81.75 - 0 = 81.75
-        # max_by_profit = 81.75 - 10 = 71.75
-        assert result.max_by_profit == 71.75
-        # max_by_roi = 81.75 / 1.35 = 60.56
-        assert abs(result.max_by_roi - 60.56) < 0.01
-        # recommended = min(71.75, 60.56) = 60.56
+        # available = risk_adjusted_net - prep_cost = 81.45 - 0 = 81.45
+        # max_by_profit = 81.45 - 10 = 71.45
+        assert result.max_by_profit == 71.45
+        # max_by_roi = 81.45 / 1.35 = 60.33
+        assert abs(result.max_by_roi - 60.33) < 0.01
+        # recommended = min(71.45, 60.33) = 60.33
         assert result.recommended_max == result.max_by_roi
 
     def test_recommended_is_minimum(self):

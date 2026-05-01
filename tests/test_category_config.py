@@ -124,7 +124,7 @@ class TestEngineBackwardCompat:
     def test_profit_engine_with_fee_override(self):
         from app.services.engines.profit_engine import compute_profit
 
-        result = compute_profit(200.0, 100.0, "ebay", fee_rate_override=0.0)
+        result = compute_profit(200.0, 100.0, "ebay", fee_rate_override=0.0, fee_fixed_override=0.0)
         assert result.fee_rate == 0.0
         assert result.marketplace_fees == 0.0
         # profit = 200 - 0 (fees) - 10 (5% return reserve) - 100 (cost) = 90

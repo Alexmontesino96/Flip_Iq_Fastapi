@@ -49,21 +49,24 @@ class TestProfitEngineZeroCost:
         assert result.roi == float("inf")
 
     def test_zero_cost_negative_profit_returns_neg_inf_roi(self):
-        # sale_price=0 → profit negativo (fees, reserves, etc.)
+        # sale_price=0 → profit negativo (fee_fixed=$0.30 makes it -0.30)
         result = compute_profit(sale_price=0, cost_price=0, marketplace="ebay")
-        # Con sale=0: gross=0, reserve=0, profit=0
-        assert result.roi == 0.0  # 0 profit / 0 invested = 0
+        # Con sale=0 + fee_fixed=0.30: profit=-0.30, cost=0 → -inf
+        assert result.roi == float("-inf")
 
     def test_zero_cost_zero_profit(self):
         """Si profit es exactamente 0 y cost es 0, ROI = 0."""
-        result = compute_profit(sale_price=0, cost_price=0, marketplace="ebay")
+        # With fee_fixed=0.30, sale=0 gives profit=-0.30, not 0.
+        # Use fee_fixed_override=0 to test the zero-profit case.
+        result = compute_profit(sale_price=0, cost_price=0, marketplace="ebay",
+                                fee_fixed_override=0.0)
         assert result.roi == 0.0
 
     def test_normal_cost_roi_unchanged(self):
         """Verify normal cost still calculates ROI correctly."""
         result = compute_profit(sale_price=100.0, cost_price=50.0, marketplace="ebay")
         assert math.isfinite(result.roi)
-        assert result.roi == 0.635  # unchanged from existing test
+        assert result.roi == 0.629  # 31.45 / 50 (includes $0.30 per-order fee)
 
 
 # ---------------------------------------------------------------------------
