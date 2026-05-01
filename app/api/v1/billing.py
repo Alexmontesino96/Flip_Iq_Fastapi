@@ -217,13 +217,9 @@ async def get_status(
 
 APPLE_PRODUCT_TO_TIER = {
     "starter_monthly": "starter",
+    "starter_yearly": "starter",
     "pro_monthly": "pro",
-}
-
-TIER_CREDITS = {
-    "free": 150,
-    "starter": 900,
-    "pro": 3000,
+    "pro_yearly": "pro",
 }
 
 
@@ -236,28 +232,91 @@ async def apple_iap_sync(
     """Sync Apple IAP subscription state with backend.
 
     Called by iOS app after a StoreKit 2 purchase or cancellation.
-    Updates user tier and credits based on the Apple product ID.
+    Updates user tier and creates/updates subscription record so that
+    Apple Server Notifications can find the user later.
     """
+    from app.services.apple_iap import APPLE_PRODUCT_TO_TIER as APPLE_TIERS
+    from app.models.subscription import Subscription
+    from sqlalchemy import select
+
     if payload.action == "cancel":
         user.tier = "free"
-        user.credits_remaining = TIER_CREDITS["free"]
         await db.commit()
-        logger.info("Apple IAP cancel: user=%s → free", user.id)
+        logger.info("Apple IAP cancel: user=%s -> free", user.id)
         return {"detail": "Tier updated to free", "tier": "free"}
 
-    tier = APPLE_PRODUCT_TO_TIER.get(payload.product_id)
+    tier = APPLE_TIERS.get(payload.product_id)
     if not tier:
         raise HTTPException(status_code=400, detail=f"Unknown product: {payload.product_id}")
 
     user.tier = tier
-    user.credits_remaining = TIER_CREDITS.get(tier, 150)
+    await db.flush()
+
+    # Upsert subscription record to link user ↔ Apple transaction ID
+    result = await db.execute(
+        select(Subscription).where(
+            Subscription.apple_original_transaction_id == payload.original_transaction_id
+        )
+    )
+    sub = result.scalar_one_or_none()
+    if sub:
+        sub.status = "active"
+        sub.plan = tier
+        sub.apple_product_id = payload.product_id
+    else:
+        sub = Subscription(
+            user_id=user.id,
+            provider="apple",
+            apple_original_transaction_id=payload.original_transaction_id,
+            apple_product_id=payload.product_id,
+            stripe_subscription_id=None,
+            stripe_price_id=None,
+            status="active",
+            plan=tier,
+        )
+        db.add(sub)
+
     await db.commit()
 
     logger.info(
-        "Apple IAP sync: user=%s product=%s → tier=%s",
-        user.id, payload.product_id, tier,
+        "Apple IAP sync: user=%s product=%s txn=%s -> tier=%s",
+        user.id, payload.product_id, payload.original_transaction_id, tier,
     )
     return {"detail": f"Tier updated to {tier}", "tier": tier}
+
+
+@router.post("/apple-webhook")
+async def apple_webhook(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Apple App Store Server Notifications V2.
+
+    No auth — verified by JWS signature from Apple.
+    Configure this URL in App Store Connect > App > General > App Store Server Notifications.
+    """
+    from app.services.apple_iap import (
+        decode_apple_notification,
+        handle_apple_notification,
+        AppleJWSError,
+    )
+
+    body = await request.body()
+    try:
+        notification = decode_apple_notification(body)
+    except AppleJWSError as e:
+        logger.warning("Apple webhook JWS verification failed: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        status = await handle_apple_notification(notification, db)
+        logger.info("Apple webhook processed: %s", status)
+    except Exception as e:
+        logger.error("Apple webhook handler error: %s", e, exc_info=True)
+        # Return 200 to prevent Apple from retrying (we logged the error)
+        return {"status": "error_logged"}
+
+    return {"status": status}
 
 
 @router.post("/webhook")

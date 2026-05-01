@@ -11,11 +11,24 @@ class Subscription(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), index=True)
-    stripe_subscription_id: Mapped[str] = mapped_column(
-        String(255), unique=True, index=True
+
+    # Provider: "stripe" | "apple"
+    provider: Mapped[str] = mapped_column(String(20), default="stripe")
+
+    # Stripe fields (nullable for Apple subscriptions)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(
+        String(255), unique=True, index=True, nullable=True
     )
-    stripe_price_id: Mapped[str] = mapped_column(String(255))
-    status: Mapped[str] = mapped_column(String(50))  # active|past_due|canceled|trialing|unpaid
+    stripe_price_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Apple fields (nullable for Stripe subscriptions)
+    apple_original_transaction_id: Mapped[str | None] = mapped_column(
+        String(255), unique=True, index=True, nullable=True
+    )
+    apple_product_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # Common fields
+    status: Mapped[str] = mapped_column(String(50))  # active|past_due|canceled|expired|refunded
     plan: Mapped[str] = mapped_column(String(20))  # starter|pro
     current_period_start: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

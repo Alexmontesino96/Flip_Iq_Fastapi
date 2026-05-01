@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     # Keepa (https://keepa.com) — datos de Amazon
     keepa_api_key: str = ""
 
+    # Apple App Store
+    apple_bundle_id: str = ""              # e.g. "com.getflipiq.app"
+    apple_shared_secret: str = ""          # App-specific shared secret
+    apple_environment: str = "Production"  # "Production" | "Sandbox"
+
     # Stripe
     stripe_secret_key: str = ""
     stripe_publishable_key: str = ""
