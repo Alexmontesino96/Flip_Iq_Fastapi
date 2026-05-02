@@ -195,10 +195,37 @@ async def handle_webhook_event(event: stripe.Event, db: AsyncSession) -> None:
         "invoice.payment_succeeded": _handle_payment_succeeded,
     }
     handler = handlers.get(event.type)
+    status = "ignored"
+    error_msg = None
+
     if handler:
-        await handler(event, db)
+        try:
+            await handler(event, db)
+            status = "success"
+        except Exception as e:
+            status = "error"
+            error_msg = str(e)
+            logger.error("Stripe handler error: %s", e, exc_info=True)
+            raise
     else:
         logger.debug("Unhandled Stripe event: %s", event.type)
+
+    # Persist webhook event
+    try:
+        from app.models.webhook_event import WebhookEvent
+        txn_id = None
+        obj = event.data.object
+        txn_id = getattr(obj, "subscription", None) or getattr(obj, "id", None)
+        db.add(WebhookEvent(
+            provider="stripe",
+            event_type=event.type,
+            status=status,
+            transaction_id=str(txn_id) if txn_id else None,
+            error_message=error_msg,
+        ))
+        await db.commit()
+    except Exception as e:
+        logger.warning("Failed to persist webhook event: %s", e)
 
 
 async def _handle_checkout_completed(event: stripe.Event, db: AsyncSession) -> None:

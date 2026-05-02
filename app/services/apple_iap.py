@@ -185,12 +185,41 @@ async def handle_apple_notification(
     }
 
     handler = handlers.get(ntype)
-    if handler:
-        await handler(notification, txn, db)
-        return f"handled:{ntype}"
+    status = "ignored"
+    error_msg = None
+    user_id = None
 
-    logger.debug("Unhandled Apple notification type: %s", ntype)
-    return f"ignored:{ntype}"
+    if handler:
+        try:
+            await handler(notification, txn, db)
+            status = "success"
+            # Try to find user_id for the log
+            user = await _find_user_by_apple_txn(original_txn_id, db, txn=txn)
+            user_id = user.id if user else None
+        except Exception as e:
+            status = "error"
+            error_msg = str(e)
+            logger.error("Apple handler error: %s", e, exc_info=True)
+    else:
+        logger.debug("Unhandled Apple notification type: %s", ntype)
+
+    # Persist webhook event
+    try:
+        from app.models.webhook_event import WebhookEvent
+        db.add(WebhookEvent(
+            provider="apple",
+            event_type=ntype,
+            event_subtype=subtype or None,
+            status=status,
+            user_id=user_id,
+            transaction_id=original_txn_id or None,
+            error_message=error_msg,
+        ))
+        await db.commit()
+    except Exception as e:
+        logger.warning("Failed to persist webhook event: %s", e)
+
+    return f"{status}:{ntype}"
 
 
 async def _find_user_by_apple_txn(
