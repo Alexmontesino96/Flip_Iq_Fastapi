@@ -74,6 +74,7 @@ def _map_listing(item: dict) -> MarketplaceListing | None:
         model=item.get("model"),
         category_path=item.get("category"),
         item_specifics=item.get("itemSpecifics"),
+        image_url=item.get("imageUrl"),
     )
 
 

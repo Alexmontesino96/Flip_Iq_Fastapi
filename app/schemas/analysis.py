@@ -84,6 +84,16 @@ class CompsInfo(BaseModel):
     initial_days_requested: float | None = None  # Días originales pedidos antes de expansión
 
 
+class SampleComp(BaseModel):
+    """Un comp real mostrado al usuario para verificar el producto."""
+    title: str
+    sold_price: float
+    sold_date: str | None = None
+    condition: str | None = None
+    url: str | None = None
+    image_url: str | None = None
+
+
 # --- Sub-schemas de los motores ---
 
 class PricingOut(BaseModel):
@@ -355,6 +365,9 @@ class AnalysisResponse(BaseModel):
 
     # No comps found — frontend should show "Product Not Found" UI
     no_comps_found: bool = False
+
+    # Sample comps: 3 ventas reales representativas para verificación visual
+    sample_comps: list[SampleComp] = []
 
     # Análisis dual: cada marketplace con su pipeline completo
     ebay_analysis: MarketplaceAnalysis | None = None

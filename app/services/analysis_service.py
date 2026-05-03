@@ -55,6 +55,7 @@ from app.schemas.analysis import (
     SellerPremiumOut,
     TitleRiskOut,
     TrendOut,
+    SampleComp,
     VelocityOut,
 )
 from app.core.brands import detect_brand
@@ -1888,6 +1889,7 @@ async def run_analysis_progressive(
         category_confidence=category_result.confidence if category_result else None,
         category_slug=category_slug,
         no_comps_found=not has_valid_comps,
+        sample_comps=_select_sample_comps(primary.cleaned),
         observation_mode=ebay_config.observation_mode if ebay_config else False,
         ebay_analysis=ebay_analysis,
         amazon_analysis=amazon_analysis,
@@ -2313,6 +2315,47 @@ def _detect_distribution_shape(prices: list[float]) -> str:
         return "dispersed"
 
     return "normal"
+
+
+def _select_sample_comps(
+    cleaned: CleanedComps,
+    n: int = 3,
+) -> list[SampleComp]:
+    """Selecciona n listings representativos: los más recientes cerca de la mediana (±1 std)."""
+    if not cleaned.listings or cleaned.clean_total == 0:
+        return []
+
+    median = cleaned.median_price
+    std = cleaned.std_dev or (cleaned.iqr / 1.35 if cleaned.iqr else median * 0.2)
+    low = median - std
+    high = median + std
+
+    # Filtrar los que están dentro de ±1 std de la mediana
+    candidates = [
+        l for l in cleaned.listings
+        if low <= l.price <= high
+    ]
+    # Fallback: si hay pocos candidatos, usar todos
+    if len(candidates) < n:
+        candidates = list(cleaned.listings)
+
+    # Ordenar por fecha más reciente
+    candidates.sort(
+        key=lambda l: l.ended_at or datetime(2000, 1, 1, tzinfo=timezone.utc),
+        reverse=True,
+    )
+
+    return [
+        SampleComp(
+            title=l.title,
+            sold_price=l.price,
+            sold_date=l.ended_at.strftime("%Y-%m-%d") if l.ended_at else None,
+            condition=l.condition,
+            url=l.url,
+            image_url=l.image_url,
+        )
+        for l in candidates[:n]
+    ]
 
 
 def _build_comps_info(

@@ -287,6 +287,12 @@ def _parse_s_card_layout(cards) -> list[dict]:
         if not item_id:
             item_id = _extract_item_id(url)
 
+        # Imagen: primer <img> dentro del card (thumbnail del listing)
+        image_url = None
+        img_el = card.select_one("img")
+        if img_el:
+            image_url = img_el.get("src") or img_el.get("data-src")
+
         # Condición: span.su-styled-text.secondary.default (no "Sell one like this")
         condition = None
         for el in card.select("span.su-styled-text"):
@@ -359,6 +365,7 @@ def _parse_s_card_layout(cards) -> list[dict]:
             "url": url,
             "itemId": item_id,
             "itemLocation": item_location,
+            "imageUrl": image_url,
         })
 
     return results
@@ -427,6 +434,14 @@ def _parse_s_item_layout(items) -> list[dict]:
         seller_el = item.select_one("span.s-item__seller-info-text")
         seller_username = _extract_seller(seller_el.get_text() if seller_el else None)
 
+        # Imagen: thumbnail del listing
+        image_url = None
+        img_el = item.select_one(".s-item__image-wrapper img")
+        if not img_el:
+            img_el = item.select_one("img")
+        if img_el:
+            image_url = img_el.get("src") or img_el.get("data-src")
+
         results.append({
             "title": title,
             "soldPrice": str(sold_price),
@@ -439,6 +454,7 @@ def _parse_s_item_layout(items) -> list[dict]:
             "url": url,
             "itemId": item_id,
             "itemLocation": item_location,
+            "imageUrl": image_url,
         })
 
     return results
