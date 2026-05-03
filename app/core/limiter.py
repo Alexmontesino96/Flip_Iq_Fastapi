@@ -2,15 +2,16 @@
 
 Tiers:
   - anonymous: 5 scans TOTAL (never resets, permanent counter)
-  - free: 5 scans/day (registered user, resets every 24h)
-  - starter: 30 scans/day ($14.99/mo)
-  - pro: 100 scans/day ($29.99/mo)
+  - free: 5 scans/day (registered user, resets at midnight ET)
+  - starter: 30 scans/day ($14.99/mo, resets at midnight ET)
+  - pro: 100 scans/day ($29.99/mo, resets at midnight ET)
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone, timedelta
 
 from fastapi import Request
 from slowapi import Limiter
@@ -33,9 +34,24 @@ limiter = Limiter(
 # Soft analysis gate
 # ---------------------------------------------------------------------------
 ANON_LIMIT = 5        # 5 total, never resets
-TTL_24H = 86400
+TTL_24H = 86400       # legacy, used by waitlist_route
 TTL_30D = 2592000     # used by waitlist_route
 VERIFIED_LIMIT = 100  # used by waitlist_route (legacy)
+
+# Timezone for midnight reset (US Eastern — where most resellers are)
+_ET = timezone(timedelta(hours=-5))
+
+
+def _seconds_until_midnight() -> int:
+    """Seconds remaining until midnight ET."""
+    now = datetime.now(_ET)
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    return int((midnight - now).total_seconds())
+
+
+def _today_date_key() -> str:
+    """Return today's date string in ET (e.g. '2026-05-03')."""
+    return datetime.now(_ET).strftime("%Y-%m-%d")
 
 # Daily scan limits per tier (authenticated users)
 TIER_DAILY_LIMITS: dict[str, int] = {
@@ -75,12 +91,13 @@ async def check_analysis_gate(
 
         try:
             user_id = str(user.id) if user else "unknown"
-            key = f"tier:{user_tier}:{user_id}"
+            date_key = _today_date_key()
+            key = f"tier:{user_tier}:{user_id}:{date_key}"
             count = int(await redis.get(key) or 0)
             if count >= daily_limit:
-                ttl = await redis.ttl(key)
                 return GateResult(
-                    allowed=False, tier=user_tier, remaining=0, reset_in=max(ttl, 0)
+                    allowed=False, tier=user_tier, remaining=0,
+                    reset_in=_seconds_until_midnight(),
                 )
             return GateResult(
                 allowed=True, tier=user_tier, remaining=daily_limit - count
@@ -133,13 +150,15 @@ async def increment_analysis_counter(
     if redis is None:
         return
 
-    # Authenticated user — increment tier-based daily counter
+    # Authenticated user — increment tier-based daily counter (resets at midnight ET)
     if gate.tier in TIER_DAILY_LIMITS and user:
         try:
-            key = f"tier:{gate.tier}:{user.id}"
+            date_key = _today_date_key()
+            key = f"tier:{gate.tier}:{user.id}:{date_key}"
             count = await redis.incr(key)
             if count == 1:
-                await redis.expire(key, TTL_24H)
+                # TTL = segundos hasta medianoche ET + 1h de margen
+                await redis.expire(key, _seconds_until_midnight() + 3600)
         except Exception as e:
             logger.warning("Error incrementando contador tier: %s", e)
         return

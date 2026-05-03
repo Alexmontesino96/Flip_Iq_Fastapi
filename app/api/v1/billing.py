@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.limiter import TIER_DAILY_LIMITS
+from app.core.limiter import TIER_DAILY_LIMITS, _today_date_key, _seconds_until_midnight
 from app.core.redis_client import get_redis
 from app.core.security import get_current_user
 from app.database import get_db
@@ -41,10 +41,10 @@ async def get_my_usage(
 
     if redis:
         try:
-            key = f"tier:{tier}:{user.id}"
+            date_key = _today_date_key()
+            key = f"tier:{tier}:{user.id}:{date_key}"
             used_today = int(await redis.get(key) or 0)
-            ttl = await redis.ttl(key)
-            reset_in = max(ttl, 0)
+            reset_in = _seconds_until_midnight()
         except Exception:
             pass
 
