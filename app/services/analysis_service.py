@@ -1889,7 +1889,9 @@ async def run_analysis_progressive(
         category_confidence=category_result.confidence if category_result else None,
         category_slug=category_slug,
         no_comps_found=not has_valid_comps,
-        sample_comps=_select_sample_comps(primary.cleaned),
+        sample_comps=_select_sample_comps(
+            ebay_pipeline.cleaned if ebay_pipeline.has_valid_comps else primary.cleaned
+        ),
         observation_mode=ebay_config.observation_mode if ebay_config else False,
         ebay_analysis=ebay_analysis,
         amazon_analysis=amazon_analysis,
