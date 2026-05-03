@@ -1875,7 +1875,7 @@ async def run_analysis_progressive(
         },
     )
     partial_response = AnalysisResponse(
-        id=None,
+        id=analysis_id,
         product=product_summary,
         cost_price=cost_price,
         marketplace=marketplace,
