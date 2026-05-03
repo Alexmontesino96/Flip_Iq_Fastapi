@@ -24,7 +24,7 @@ class TestGlobalDefaults:
 
     def test_defaults_match_engine_hardcoded_values(self):
         """Global defaults must match the original hardcoded engine values."""
-        assert GLOBAL_DEFAULTS["fee_rate"] == 0.1325
+        assert GLOBAL_DEFAULTS["fee_rate"] == 0.136
         assert GLOBAL_DEFAULTS["return_reserve_pct"] == 0.05
         assert GLOBAL_DEFAULTS["risk_cv_threshold"] == 0.60
         assert GLOBAL_DEFAULTS["risk_dispersion_threshold"] == 0.60
@@ -45,7 +45,7 @@ class TestResolvedConfig:
     def test_default_config_matches_global(self):
         """ResolvedConfig() with no args should match GLOBAL_DEFAULTS."""
         cfg = ResolvedConfig()
-        assert cfg.fee_rate == 0.1325
+        assert cfg.fee_rate == 0.136
         assert cfg.risk_cv_threshold == 0.60
         assert cfg.velocity_coefficient == 25
         assert cfg.config_source == "global"
@@ -90,7 +90,7 @@ class TestResolvedConfig:
         assert cfg.shipping_cost == 15.00
         assert cfg.risk_cv_threshold == 0.55
         # Global defaults preserved for un-overridden keys
-        assert cfg.fee_rate == 0.1325
+        assert cfg.fee_rate == 0.136
         assert cfg.velocity_coefficient == 25
 
     def test_channel_overrides_merge(self):
@@ -118,7 +118,7 @@ class TestEngineBackwardCompat:
         from app.services.engines.profit_engine import compute_profit
 
         result = compute_profit(100.0, 50.0, "ebay")
-        assert result.fee_rate == 0.1325
+        assert result.fee_rate == 0.136
         assert result.profit > 0
 
     def test_profit_engine_with_fee_override(self):

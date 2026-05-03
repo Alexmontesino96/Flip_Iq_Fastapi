@@ -9,14 +9,17 @@ from decimal import Decimal
 
 def ebay_fees(
     sale_price: Decimal,
-    category_rate: Decimal = Decimal("0.1325"),
-    per_order_fee: Decimal = Decimal("0.30"),
+    category_rate: Decimal = Decimal("0.136"),
+    per_order_fee: Decimal | None = None,
 ) -> dict:
     """Estima fees de eBay (final value fee + per-order fee).
 
-    eBay cobra ~13.25% en la mayoría de categorías (incluye payment processing)
-    más $0.30 por transacción.
+    eBay cobra ~13.6% en la mayoría de categorías (incluye payment processing)
+    más $0.30 (≤$10) o $0.40 (>$10) por transacción.
+    Rates actualizados Feb 2025.
     """
+    if per_order_fee is None:
+        per_order_fee = Decimal("0.30") if sale_price <= 10 else Decimal("0.40")
     final_value = sale_price * category_rate + per_order_fee
     net = sale_price - final_value
     return {
@@ -79,12 +82,12 @@ def facebook_marketplace_fees(
 
 
 MARKETPLACE_FEE_RATES = {
-    "ebay": 0.1325,
+    "ebay": 0.136,       # 13.6% final value fee (Feb 2025 update)
     "amazon_fba": 0.15,
 }
 
 MARKETPLACE_FEE_FIXED = {
-    "ebay": 0.30,       # per-order fee
+    "ebay": 0.40,        # per-order fee ($0.40 for sales >$10, most reselling)
     "amazon_fba": 3.50,  # FBA fulfillment (default, overridden by Keepa)
 }
 

@@ -25,8 +25,8 @@ logger = logging.getLogger("flipiq.category_config")
 
 GLOBAL_DEFAULTS: dict[str, object] = {
     # Fees (profit_engine.py) — eBay defaults, overridden per-channel below
-    "fee_rate": 0.1325,
-    "fee_fixed": 0.30,   # eBay per-order fee
+    "fee_rate": 0.136,
+    "fee_fixed": 0.40,   # eBay per-order fee ($0.40 for sales >$10)
     "fee_note": None,
     # Profit engine
     "return_reserve_pct": 0.05,
@@ -98,7 +98,7 @@ class ResolvedConfig:
     """Fully resolved configuration for a single analysis run."""
 
     # Fees (defaults — overridden by fee_brackets when available)
-    fee_rate: float = 0.1325
+    fee_rate: float = 0.136
     fee_fixed: float = 0.0
     fee_note: str | None = None
     fee_brackets: list[FeeBracket] = field(default_factory=list)

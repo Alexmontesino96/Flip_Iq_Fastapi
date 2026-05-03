@@ -6,8 +6,8 @@ from app.core.fees import calculate_margin, ebay_fees, amazon_fba_fees
 def test_ebay_fees_basic():
     result = ebay_fees(Decimal("100"))
     assert result["marketplace"] == "ebay"
-    assert result["final_value_fee"] == 13.55  # 13.25% + $0.30 per-order
-    assert result["net_proceeds"] == 86.45
+    assert result["final_value_fee"] == 14.0  # 13.6% + $0.40 per-order (>$10)
+    assert result["net_proceeds"] == 86.0
 
 
 def test_amazon_fba_fees_basic():

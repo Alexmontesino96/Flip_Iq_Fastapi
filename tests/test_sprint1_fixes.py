@@ -66,7 +66,7 @@ class TestProfitEngineZeroCost:
         """Verify normal cost still calculates ROI correctly."""
         result = compute_profit(sale_price=100.0, cost_price=50.0, marketplace="ebay")
         assert math.isfinite(result.roi)
-        assert result.roi == 0.629  # 31.45 / 50 (includes $0.30 per-order fee)
+        assert result.roi == 0.62  # 31.0 / 50 (includes $0.40 per-order fee)
 
 
 # ---------------------------------------------------------------------------
