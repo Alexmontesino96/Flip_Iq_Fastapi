@@ -665,6 +665,7 @@ async def get_analysis_detail(
         "velocity_score": a.velocity_score,
         "recommendation": a.recommendation,
         "channels": a.channels,
+        "sample_comps": engines.get("sample_comps", []),
         "summary": summary,
         "ai_explanation": a.ai_explanation,
         "ebay_analysis": ebay_analysis,

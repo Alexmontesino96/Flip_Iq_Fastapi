@@ -2041,7 +2041,13 @@ async def run_analysis_progressive(
     # -----------------------------------------------------------------------
     # 9. Engines data + persistencia
     # -----------------------------------------------------------------------
+    # Sample comps para persistir en engines_data (reutilizable en GET)
+    _sample_comps_data = [s.model_dump() for s in _select_sample_comps(
+        ebay_pipeline.cleaned if ebay_pipeline.has_valid_comps else primary.cleaned
+    )]
+
     engines_data = {
+        "sample_comps": _sample_comps_data,
         "pricing": asdict(primary.pricing),
         "profit_market": asdict(primary.profit_market),
         "profit_quick": asdict(primary.profit_quick),
