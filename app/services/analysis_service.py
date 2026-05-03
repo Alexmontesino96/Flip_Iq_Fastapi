@@ -111,6 +111,10 @@ def _get_amazon_client() -> AmazonClient:
     return _amazon_client
 
 
+# Semáforo global: limita análisis concurrentes para no saturar DB/scraper/CPU
+_analysis_semaphore = asyncio.Semaphore(8)
+
+
 # Frases de condición que el usuario puede incluir en el keyword
 _CONDITION_PHRASES = re.compile(
     r"\b(lightly used|gently used|barely used|heavily used|slightly used|well used"
@@ -979,7 +983,6 @@ def _validate_buy(
 # ---------------------------------------------------------------------------
 
 async def run_analysis_progressive(
-    db: AsyncSession,
     barcode: str | None,
     keyword: str | None,
     cost_price: float,
@@ -1112,7 +1115,9 @@ async def run_analysis_progressive(
             product_type = category_result.product_type
             # Map eBay category ID to our internal category slug for config
             try:
-                category_slug = await map_to_category_slug(category_result.ebay_category_id, db)
+                from app.database import async_session as _sf
+                async with _sf() as _cat_db:
+                    category_slug = await map_to_category_slug(category_result.ebay_category_id, _cat_db)
             except Exception:
                 category_slug = None
             logger.info(
@@ -1304,8 +1309,10 @@ async def run_analysis_progressive(
     ebay_config: ResolvedConfig | None = None
     amazon_config: ResolvedConfig | None = None
     try:
-        ebay_config = await resolve_config(category_slug, channel="ebay", db=db)
-        amazon_config = await resolve_config(category_slug, channel="amazon_fba", db=db)
+        from app.database import async_session as _sf
+        async with _sf() as _cfg_db:
+            ebay_config = await resolve_config(category_slug, channel="ebay", db=_cfg_db)
+            amazon_config = await resolve_config(category_slug, channel="amazon_fba", db=_cfg_db)
     except Exception as e:
         logger.warning("Category config resolution failed, using global defaults: %s", e)
 
@@ -1540,9 +1547,11 @@ async def run_analysis_progressive(
     if user_id:
         try:
             from app.models.user import User as _UserModel
-            _user_obj = await db.get(_UserModel, user_id)
-            if _user_obj:
-                _user_tier = _user_obj.tier
+            from app.database import async_session as _sf
+            async with _sf() as _tier_db:
+                _user_obj = await _tier_db.get(_UserModel, user_id)
+                if _user_obj:
+                    _user_tier = _user_obj.tier
         except Exception:
             pass
 
@@ -1589,9 +1598,14 @@ async def run_analysis_progressive(
     # 6b. Construir datos para chunk 1 (mientras AI corre en background)
     # -----------------------------------------------------------------------
 
-    # Producto
+    # Producto — sesión corta solo para DB
+    from app.database import async_session as _sf
+    product = None
+    _persist_db = None
     try:
-        product = await _find_or_create_product(db, barcode, keyword, primary.raw_comps, upc_info)
+        _persist_db = _sf()
+        _db = await _persist_db.__aenter__()
+        product = await _find_or_create_product(_db, barcode, keyword, primary.raw_comps, upc_info)
         if product and not product.image_url and amazon_raw and amazon_raw.image_url:
             product.image_url = amazon_raw.image_url
     except Exception as e:
@@ -1782,19 +1796,18 @@ async def run_analysis_progressive(
         )
         try:
             analysis = Analysis(**analysis_kwargs)
-            db.add(analysis)
-            await db.commit()
-            await db.refresh(analysis)
+            _db.add(analysis)
+            await _db.commit()
+            await _db.refresh(analysis)
             analysis_id = analysis.id
         except Exception as e:
             logger.warning("DB persist failed (attempt 1): %s", e)
             try:
-                await db.rollback()
+                await _db.rollback()
             except Exception:
                 pass
             try:
-                from app.database import async_session as _session_factory
-                async with _session_factory() as fresh_db:
+                async with _sf() as fresh_db:
                     analysis = Analysis(**analysis_kwargs)
                     fresh_db.add(analysis)
                     await fresh_db.commit()
@@ -1818,14 +1831,22 @@ async def run_analysis_progressive(
                 cost_price=cost_price,
                 marketplace=marketplace,
             )
-            db.add(review)
-            await db.commit()
+            _db.add(review)
+            await _db.commit()
         except Exception as e:
             logger.warning("Manual review request failed: %s", e)
             try:
-                await db.rollback()
+                await _db.rollback()
             except Exception:
                 pass
+
+    # Cerrar sesión DB — ya no se necesita hasta el UPDATE final
+    if _persist_db is not None:
+        try:
+            await _persist_db.__aexit__(None, None, None)
+        except Exception:
+            pass
+        _persist_db = None
 
     # -----------------------------------------------------------------------
     # YIELD 1: Respuesta parcial (sin AI explanation)
@@ -2071,18 +2092,20 @@ async def run_analysis_progressive(
     # UPDATE analysis with AI explanation + post-intelligence adjustments
     if analysis_id is not None:
         try:
-            analysis.ai_explanation = ai_explanation if has_valid_comps else None
-            analysis.flip_score = opportunity if has_valid_comps else None
-            analysis.risk_score = risk.score if has_valid_comps else None
-            analysis.recommendation = recommendation
-            analysis.engines_data = engines_data
-            await db.commit()
+            async with _sf() as _upd_db:
+                from sqlalchemy import update
+                await _upd_db.execute(
+                    update(Analysis).where(Analysis.id == analysis_id).values(
+                        ai_explanation=ai_explanation if has_valid_comps else None,
+                        flip_score=opportunity if has_valid_comps else None,
+                        risk_score=risk.score if has_valid_comps else None,
+                        recommendation=recommendation,
+                        engines_data=engines_data,
+                    )
+                )
+                await _upd_db.commit()
         except Exception as e:
             logger.warning("DB update (AI fields) failed: %s", e)
-            try:
-                await db.rollback()
-            except Exception:
-                pass
 
     logger.info(
         "ANALYSIS product=%r cost=%.2f marketplace=%s sale=%.2f profit=%s roi=%s "
@@ -2127,7 +2150,6 @@ async def run_analysis_progressive(
 # ---------------------------------------------------------------------------
 
 async def run_analysis(
-    db: AsyncSession,
     barcode: str | None,
     keyword: str | None,
     cost_price: float,
@@ -2146,9 +2168,39 @@ async def run_analysis(
     user_id: int | None = None,
 ) -> AnalysisResponse:
     """Endpoint sincrono: espera todo y retorna la respuesta completa."""
+    async with _analysis_semaphore:
+        return await _run_analysis_inner(
+            barcode=barcode, keyword=keyword, cost_price=cost_price,
+            marketplace=marketplace, shipping_cost=shipping_cost,
+            packaging_cost=packaging_cost, prep_cost=prep_cost,
+            promo_cost=promo_cost, return_reserve_pct=return_reserve_pct,
+            target_profit=target_profit, target_roi=target_roi,
+            detailed=detailed, condition=condition, mode=mode,
+            product_type=product_type, user_id=user_id,
+        )
+
+
+async def _run_analysis_inner(
+    barcode: str | None,
+    keyword: str | None,
+    cost_price: float,
+    marketplace: str,
+    shipping_cost: float = 0.0,
+    packaging_cost: float = 0.0,
+    prep_cost: float = 0.0,
+    promo_cost: float = 0.0,
+    return_reserve_pct: float = 0.05,
+    target_profit: float = 10.0,
+    target_roi: float = 0.35,
+    detailed: bool = False,
+    condition: str = "any",
+    mode: str = "standard",
+    product_type: str | None = None,
+    user_id: int | None = None,
+) -> AnalysisResponse:
     result = None
     async for chunk in run_analysis_progressive(
-        db=db, barcode=barcode, keyword=keyword, cost_price=cost_price,
+        barcode=barcode, keyword=keyword, cost_price=cost_price,
         marketplace=marketplace, shipping_cost=shipping_cost,
         packaging_cost=packaging_cost, prep_cost=prep_cost,
         promo_cost=promo_cost, return_reserve_pct=return_reserve_pct,

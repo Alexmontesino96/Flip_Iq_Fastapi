@@ -40,8 +40,20 @@ def _mock_db():
     return db
 
 
+def _mock_session_factory():
+    """Returns a mock async_session that yields a mock db on async with."""
+    mock_db = _mock_db()
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=mock_db)
+    cm.__aexit__ = AsyncMock(return_value=False)
+
+    factory = MagicMock(return_value=cm)
+    return factory
+
+
 # Patch settings.keepa_api_key=None para que Amazon no entre en el flujo
 _KEEPA_PATCH = patch("app.services.analysis_service.settings.keepa_api_key", None)
+_DB_PATCH = patch("app.database.async_session", new_callable=_mock_session_factory)
 
 
 class TestUpcTitleSimplification:
@@ -64,7 +76,7 @@ class TestUpcFirstLimits:
         mock_ebay.get_sold_comps = AsyncMock(return_value=_make_comps(100))
 
         with (
-            _KEEPA_PATCH,
+            _KEEPA_PATCH, _DB_PATCH,
             patch("app.services.analysis_service._get_ebay_client", return_value=mock_ebay),
             patch("app.services.analysis_service.lookup_upc", new_callable=AsyncMock, return_value={"title": "Nintendo Switch OLED"}),
             patch("app.services.analysis_service.categorize_product", new_callable=AsyncMock, return_value=None),
@@ -72,7 +84,7 @@ class TestUpcFirstLimits:
         ):
             from app.services.analysis_service import run_analysis
             await run_analysis(
-                db=_mock_db(), barcode="045496596439", keyword=None,
+                barcode="045496596439", keyword=None,
                 cost_price=200.0, marketplace="ebay",
             )
 
@@ -86,7 +98,7 @@ class TestUpcFirstLimits:
         mock_ebay.get_sold_comps = AsyncMock(return_value=_make_comps(30))
 
         with (
-            _KEEPA_PATCH,
+            _KEEPA_PATCH, _DB_PATCH,
             patch("app.services.analysis_service._get_ebay_client", return_value=mock_ebay),
             patch("app.services.analysis_service.categorize_product", new_callable=AsyncMock, return_value=None),
             patch("app.services.analysis_service.enrich_listings", new_callable=AsyncMock, side_effect=lambda comps, **kw: comps),
@@ -95,7 +107,7 @@ class TestUpcFirstLimits:
         ):
             from app.services.analysis_service import run_analysis
             await run_analysis(
-                db=_mock_db(), barcode=None, keyword="Nintendo Switch OLED",
+                barcode=None, keyword="Nintendo Switch OLED",
                 cost_price=200.0, marketplace="ebay",
             )
 
@@ -115,7 +127,7 @@ class TestUpcSkipsEnricher:
         mock_filter = AsyncMock(side_effect=lambda comps, kw: comps)
 
         with (
-            _KEEPA_PATCH,
+            _KEEPA_PATCH, _DB_PATCH,
             patch("app.services.analysis_service._get_ebay_client", return_value=mock_ebay),
             patch("app.services.analysis_service.lookup_upc", new_callable=AsyncMock, return_value={"title": "Nintendo Switch OLED"}),
             patch("app.services.analysis_service.categorize_product", new_callable=AsyncMock, return_value=None),
@@ -125,7 +137,7 @@ class TestUpcSkipsEnricher:
         ):
             from app.services.analysis_service import run_analysis
             await run_analysis(
-                db=_mock_db(), barcode="045496596439", keyword=None,
+                barcode="045496596439", keyword=None,
                 cost_price=200.0, marketplace="ebay",
             )
 
@@ -143,7 +155,7 @@ class TestUpcSkipsEnricher:
         mock_filter = AsyncMock(side_effect=lambda comps, kw: comps)
 
         with (
-            _KEEPA_PATCH,
+            _KEEPA_PATCH, _DB_PATCH,
             patch("app.services.analysis_service._get_ebay_client", return_value=mock_ebay),
             patch("app.services.analysis_service.categorize_product", new_callable=AsyncMock, return_value=None),
             patch("app.services.analysis_service.enrich_listings", mock_enrich),
@@ -152,7 +164,7 @@ class TestUpcSkipsEnricher:
         ):
             from app.services.analysis_service import run_analysis
             await run_analysis(
-                db=_mock_db(), barcode=None, keyword="Nintendo Switch OLED",
+                barcode=None, keyword="Nintendo Switch OLED",
                 cost_price=200.0, marketplace="ebay",
             )
 
@@ -172,7 +184,7 @@ class TestUpcFallback:
         mock_ebay.get_sold_comps = AsyncMock(side_effect=[empty_comps, kw_comps])
 
         with (
-            _KEEPA_PATCH,
+            _KEEPA_PATCH, _DB_PATCH,
             patch("app.services.analysis_service._get_ebay_client", return_value=mock_ebay),
             patch("app.services.analysis_service.lookup_upc", new_callable=AsyncMock, return_value={"title": "Nintendo Switch OLED"}),
             patch("app.services.analysis_service.categorize_product", new_callable=AsyncMock, return_value=None),
@@ -182,7 +194,7 @@ class TestUpcFallback:
         ):
             from app.services.analysis_service import run_analysis
             await run_analysis(
-                db=_mock_db(), barcode="045496596439", keyword=None,
+                barcode="045496596439", keyword=None,
                 cost_price=200.0, marketplace="ebay",
             )
 
@@ -214,7 +226,7 @@ class TestUpcFallback:
         mock_ebay.get_sold_comps = AsyncMock(side_effect=[wrong_condition_comps, kw_comps])
 
         with (
-            _KEEPA_PATCH,
+            _KEEPA_PATCH, _DB_PATCH,
             patch("app.services.analysis_service._get_ebay_client", return_value=mock_ebay),
             patch("app.services.analysis_service.lookup_upc", new_callable=AsyncMock, return_value={"title": "Nintendo Switch OLED"}),
             patch("app.services.analysis_service.categorize_product", new_callable=AsyncMock, return_value=None),
@@ -224,7 +236,7 @@ class TestUpcFallback:
         ):
             from app.services.analysis_service import run_analysis
             await run_analysis(
-                db=_mock_db(), barcode="045496596439", keyword=None,
+                barcode="045496596439", keyword=None,
                 cost_price=200.0, marketplace="ebay", condition="new",
             )
 
@@ -241,7 +253,7 @@ class TestUpcFallback:
         mock_ebay.get_sold_comps = AsyncMock(return_value=_make_comps(100))
 
         with (
-            _KEEPA_PATCH,
+            _KEEPA_PATCH, _DB_PATCH,
             patch("app.services.analysis_service._get_ebay_client", return_value=mock_ebay),
             patch("app.services.analysis_service.lookup_upc", new_callable=AsyncMock, return_value={"title": "Nintendo Switch OLED"}),
             patch("app.services.analysis_service.categorize_product", new_callable=AsyncMock, return_value=None),
@@ -249,7 +261,7 @@ class TestUpcFallback:
         ):
             from app.services.analysis_service import run_analysis
             await run_analysis(
-                db=_mock_db(), barcode="045496596439", keyword=None,
+                barcode="045496596439", keyword=None,
                 cost_price=200.0, marketplace="ebay",
             )
 

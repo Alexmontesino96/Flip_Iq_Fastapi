@@ -11,7 +11,7 @@ from app.config import settings
 from app.core.limiter import check_analysis_gate, increment_analysis_counter
 from app.core.redis_client import get_redis
 from app.core.security import get_current_user, get_current_user_optional
-from app.database import async_session, get_db
+from app.database import get_db
 from app.models.analysis import Analysis, AnalysisFeedback
 from app.models.product import Product
 from app.models.user import User
@@ -24,7 +24,7 @@ from app.schemas.analysis import (
     FlaggedItem,
     NotFoundItem,
 )
-from app.services.analysis_service import run_analysis, run_analysis_progressive
+from app.services.analysis_service import run_analysis, run_analysis_progressive, _analysis_semaphore
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +131,6 @@ async def analyze_product(
     current_user_id = user.id if user else None
 
     result = await run_analysis(
-        db=db,
         barcode=payload.barcode,
         keyword=payload.keyword,
         cost_price=payload.cost_price,
@@ -192,10 +191,9 @@ async def analyze_product_stream(
     user_id = user.id if user else None
 
     async def event_stream():
-        async with async_session() as stream_db:
+        async with _analysis_semaphore:
             try:
                 async for chunk in run_analysis_progressive(
-                    db=stream_db,
                     barcode=payload.barcode,
                     keyword=payload.keyword,
                     cost_price=payload.cost_price,
