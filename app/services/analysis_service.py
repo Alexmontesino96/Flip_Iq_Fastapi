@@ -458,6 +458,13 @@ def _run_pipeline(
             "Monitor before buying large quantities."
         )
 
+    # Warning: precio plano (varianza cero) — probable single-seller market
+    if cleaned.clean_total >= 5 and cleaned.std_dev == 0 and cleaned.p25 == cleaned.p75:
+        warnings.append(
+            "All comps at the same price — likely a single-seller or fixed-price market. "
+            "Pricing data may not reflect true market value."
+        )
+
     # Comps info
     has_valid_comps = cleaned.clean_total > 0 and pricing.market_list > 0
     comps_info, _ = _build_comps_info(cleaned, source=f"{marketplace_name}_cleaned")
@@ -2319,6 +2326,17 @@ def _detect_distribution_shape(prices: list[float]) -> str:
     return "normal"
 
 
+def _clean_listing_url(url: str | None) -> str | None:
+    """Limpia URLs de eBay: solo /itm/ITEM_ID, sin query params del scraper."""
+    if not url:
+        return None
+    # eBay: https://www.ebay.com/itm/123456?_skw=... → https://www.ebay.com/itm/123456
+    if "ebay.com/itm/" in url:
+        return url.split("?")[0]
+    # Amazon: https://www.amazon.com/dp/B09... → ya está limpia
+    return url.split("?")[0] if "amazon.com" in url else url
+
+
 def _select_sample_comps(
     cleaned: CleanedComps,
     n: int = 3,
@@ -2353,7 +2371,7 @@ def _select_sample_comps(
             sold_price=l.price,
             sold_date=l.ended_at.strftime("%Y-%m-%d") if l.ended_at else None,
             condition=l.condition,
-            url=l.url,
+            url=_clean_listing_url(l.url),
             image_url=l.image_url,
         )
         for l in candidates[:n]
