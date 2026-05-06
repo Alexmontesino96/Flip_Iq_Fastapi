@@ -80,7 +80,11 @@ def _map_listing(item: dict) -> MarketplaceListing | None:
 
 
 UPC_LOOKUP_URL = "https://api.upcitemdb.com/prod/trial/lookup"
-OFF_LOOKUP_URL = "https://world.openfoodfacts.org/api/v2/product/{barcode}.json"
+OFF_LOOKUP_URLS = [
+    "https://world.openfoodfacts.org/api/v2/product/{barcode}.json",
+    "https://world.openproductsfacts.org/api/v2/product/{barcode}.json",
+    "https://world.openbeautyfacts.org/api/v2/product/{barcode}.json",
+]
 
 
 async def _lookup_upc_itemdb(barcode: str, client: httpx.AsyncClient) -> dict | None:
@@ -108,32 +112,34 @@ async def _lookup_upc_itemdb(barcode: str, client: httpx.AsyncClient) -> dict | 
 
 
 async def _lookup_open_food_facts(barcode: str, client: httpx.AsyncClient) -> dict | None:
-    """UPC lookup via Open Food Facts (good for grocery/household items)."""
-    try:
-        url = OFF_LOOKUP_URL.format(barcode=barcode)
-        resp = await client.get(url)
-        resp.raise_for_status()
-        data = resp.json()
+    """UPC lookup via Open Food/Products/Beauty Facts databases."""
+    for url_template in OFF_LOOKUP_URLS:
+        try:
+            url = url_template.format(barcode=barcode)
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
 
-        if data.get("status") != 1:
-            return None
+            if data.get("status") != 1:
+                continue
 
-        product = data.get("product", {})
-        title = product.get("product_name") or product.get("product_name_en") or ""
-        if not title:
-            return None
+            product = data.get("product", {})
+            title = product.get("product_name") or product.get("product_name_en") or ""
+            if not title:
+                continue
 
-        brand = product.get("brands", "")
-        image_url = product.get("image_front_url") or product.get("image_url")
-        return {
-            "title": title,
-            "brand": brand,
-            "model": "",
-            "image_url": image_url,
-        }
-    except Exception as e:
-        logger.debug("Open Food Facts lookup failed for %s: %s", barcode, e)
-        return None
+            brand = product.get("brands", "")
+            image_url = product.get("image_front_url") or product.get("image_url")
+            return {
+                "title": title,
+                "brand": brand,
+                "model": "",
+                "image_url": image_url,
+            }
+        except Exception as e:
+            logger.debug("OFF lookup failed (%s) for %s: %s", url_template.split("/")[2], barcode, e)
+            continue
+    return None
 
 
 async def lookup_upc(barcode: str) -> dict | None:
