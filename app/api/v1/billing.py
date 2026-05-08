@@ -68,6 +68,7 @@ _PLAN_CATALOG = [
         "tag": None,
         "ai_unlocked": False,
         "features": [
+            "5 scans per day",
             "eBay + Amazon comps",
             "Keyword search",
             "Basic flip score",
