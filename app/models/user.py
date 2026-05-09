@@ -24,6 +24,10 @@ class User(Base):
     stripe_customer_id: Mapped[str | None] = mapped_column(
         String(255), unique=True, nullable=True, index=True
     )
+    onesignal_subscription_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+    customerio_synced: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
     analyses = relationship("Analysis", back_populates="user")
     watchlists = relationship("Watchlist", back_populates="user")

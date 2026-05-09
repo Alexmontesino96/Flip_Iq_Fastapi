@@ -112,6 +112,21 @@ async def get_current_user(
                     detail="Failed to create user account",
                 )
 
+    # Sync to Customer.io on first authenticated request
+    if user and not user.customerio_synced:
+        import asyncio
+        from app.services import customerio as _cio
+
+        async def _sync_cio(u, db_session):
+            await _cio.track_signup(u)
+            u.customerio_synced = True
+            try:
+                await db_session.commit()
+            except Exception:
+                pass
+
+        asyncio.create_task(_sync_cio(user, db))
+
     return user
 
 
