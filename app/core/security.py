@@ -116,16 +116,12 @@ async def get_current_user(
     if user and not user.customerio_synced:
         import asyncio
         from app.services import customerio as _cio
-
-        async def _sync_cio(u, db_session):
-            await _cio.track_signup(u)
-            u.customerio_synced = True
-            try:
-                await db_session.commit()
-            except Exception:
-                pass
-
-        asyncio.create_task(_sync_cio(user, db))
+        user.customerio_synced = True
+        try:
+            await db.commit()
+        except Exception:
+            pass
+        asyncio.create_task(_cio.track_signup(user))
 
     return user
 
