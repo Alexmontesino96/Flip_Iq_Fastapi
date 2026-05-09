@@ -365,6 +365,7 @@ class AnalysisResponse(BaseModel):
 
     # No comps found — frontend should show "Product Not Found" UI
     no_comps_found: bool = False
+    manual_review_id: int | None = None
 
     # Sample comps: 3 ventas reales representativas para verificación visual
     sample_comps: list[SampleComp] = []
@@ -462,3 +463,10 @@ class FlaggedItem(BaseModel):
     comment: str | None
     actual_sale_price: float | None
     flagged_at: datetime
+
+
+class ProductDetailSubmission(BaseModel):
+    """Detalles de producto enviados por el usuario para revisión manual."""
+    product_name: str | None = None
+    product_category: str | None = None
+    image_url: str | None = None

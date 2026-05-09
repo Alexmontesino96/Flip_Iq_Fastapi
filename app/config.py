@@ -67,6 +67,14 @@ class Settings(BaseSettings):
     apple_shared_secret: str = ""          # App-specific shared secret
     apple_environment: str = "Production"  # "Production" | "Sandbox"
 
+    # OneSignal (push notifications / Journeys)
+    onesignal_app_id: str = ""
+    onesignal_rest_api_key: str = ""
+
+    # Customer.io (email / messaging)
+    customerio_site_id: str = ""
+    customerio_api_key: str = ""
+
     # Stripe
     stripe_secret_key: str = ""
     stripe_publishable_key: str = ""

@@ -1828,6 +1828,7 @@ async def run_analysis_progressive(
     # -----------------------------------------------------------------------
     # AUTO: crear manual review request si no hay comps
     # -----------------------------------------------------------------------
+    manual_review_id: int | None = None
     if not has_valid_comps and user_id:
         try:
             from app.models.manual_review import ManualReviewRequest
@@ -1841,6 +1842,8 @@ async def run_analysis_progressive(
             )
             _db.add(review)
             await _db.commit()
+            await _db.refresh(review)
+            manual_review_id = review.id
         except Exception as e:
             logger.warning("Manual review request failed: %s", e)
             try:
@@ -1896,6 +1899,7 @@ async def run_analysis_progressive(
         category_confidence=category_result.confidence if category_result else None,
         category_slug=category_slug,
         no_comps_found=not has_valid_comps,
+        manual_review_id=manual_review_id,
         sample_comps=_select_sample_comps(
             ebay_pipeline.cleaned if ebay_pipeline.has_valid_comps else primary.cleaned
         ),
@@ -2511,8 +2515,9 @@ def _calculate_all_channels(
     for name, calc_fn in MARKETPLACE_CALCULATORS.items():
         fees = calc_fn(Decimal(str(sale_price)))
         gross_after_fees = fees["net_proceeds"]
+        from app.services.engines.profit_engine import compute_return_reserve
         net = gross_after_fees - shipping_cost - packaging_cost - promo_cost
-        return_reserve = sale_price * return_reserve_pct
+        return_reserve = compute_return_reserve(sale_price)
         profit = net - return_reserve - cost - prep_cost
         total_invested = cost + prep_cost
         roi_pct = (profit / total_invested * 100) if total_invested > 0 else 0

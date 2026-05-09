@@ -88,6 +88,12 @@ async def get_current_user(
             await db.commit()
             await db.refresh(user)
             logger.info("Auto-created user: id=%s email=%s", user.id, email)
+            import asyncio
+            from app.services import customerio
+            asyncio.create_task(customerio.track_signup(user))
+            if user.onesignal_subscription_id:
+                from app.services import onesignal
+                asyncio.create_task(onesignal.tag_new_user(user.onesignal_subscription_id, user))
         except Exception as e:
             await db.rollback()
             logger.warning("User creation failed, retrying lookup: %s", e)

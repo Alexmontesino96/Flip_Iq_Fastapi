@@ -36,6 +36,15 @@ stripe>=11.0.0
 # AI
 openai==1.58.1
 
+# ML Models (local inference, reemplaza LLM para clasificación)
+scikit-learn>=1.4
+lightgbm>=4.0
+onnxruntime>=1.17
+skl2onnx>=1.16
+
+# Customer.io
+customerio>=2.4
+
 # Dev / Testing
 pytest==8.3.4
 pytest-asyncio==0.25.0

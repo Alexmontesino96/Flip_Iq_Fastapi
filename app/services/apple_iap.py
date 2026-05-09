@@ -324,6 +324,12 @@ async def _upsert_apple_subscription(
         user.tier = tier
     else:
         user.tier = "free"
+    import asyncio
+    from app.services import customerio
+    asyncio.create_task(customerio.update_plan(user.id, user.tier))
+    if user.onesignal_subscription_id:
+        from app.services import onesignal
+        asyncio.create_task(onesignal.update_tier_tag(user.onesignal_subscription_id, user.tier))
 
     await db.commit()
     logger.info(
@@ -386,6 +392,12 @@ async def _handle_plan_change(
     if subtype == "UPGRADE":
         # Upgrade takes effect immediately
         user.tier = new_tier
+        import asyncio
+        from app.services import customerio
+        asyncio.create_task(customerio.update_plan(user.id, new_tier))
+        if user.onesignal_subscription_id:
+            from app.services import onesignal
+            asyncio.create_task(onesignal.update_tier_tag(user.onesignal_subscription_id, new_tier))
         await db.commit()
         logger.info("Apple plan upgrade: user=%s → %s (immediate)", user.id, new_tier)
     else:

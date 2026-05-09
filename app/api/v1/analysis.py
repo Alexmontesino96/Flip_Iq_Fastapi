@@ -15,6 +15,7 @@ from app.database import get_db
 from app.models.analysis import Analysis, AnalysisFeedback
 from app.models.product import Product
 from app.models.user import User
+from app.models.manual_review import ManualReviewRequest
 from app.schemas.analysis import (
     AnalysisRequest,
     AnalysisResponse,
@@ -23,6 +24,7 @@ from app.schemas.analysis import (
     FeedbackResponse,
     FlaggedItem,
     NotFoundItem,
+    ProductDetailSubmission,
 )
 from app.services.analysis_service import run_analysis, run_analysis_progressive, _analysis_semaphore
 
@@ -297,6 +299,35 @@ async def list_not_found(
         )
         for a, p in rows
     ]
+
+
+@router.patch("/manual-reviews/{analysis_id}/details")
+async def submit_product_details(
+    analysis_id: int,
+    body: ProductDetailSubmission,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Agrega detalles de producto a una revisión manual existente."""
+    result = await db.execute(
+        select(ManualReviewRequest).where(
+            ManualReviewRequest.analysis_id == analysis_id,
+            ManualReviewRequest.user_id == user.id,
+        )
+    )
+    review = result.scalar_one_or_none()
+    if not review:
+        raise HTTPException(404, "Manual review not found for this analysis")
+
+    if body.product_name is not None:
+        review.product_name = body.product_name
+    if body.product_category is not None:
+        review.product_category = body.product_category
+    if body.image_url is not None:
+        review.image_url = body.image_url
+
+    await db.commit()
+    return {"ok": True, "review_id": review.id}
 
 
 @router.get("/flagged", response_model=list[FlaggedItem])

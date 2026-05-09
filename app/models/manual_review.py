@@ -23,6 +23,11 @@ class ManualReviewRequest(Base):
     cost_price: Mapped[float | None] = mapped_column(nullable=True)
     marketplace: Mapped[str] = mapped_column(String(50), default="ebay")
 
+    # Detalles proporcionados por el usuario
+    product_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    product_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     # Estado del review
     status: Mapped[str] = mapped_column(
         String(20), default="pending", index=True
