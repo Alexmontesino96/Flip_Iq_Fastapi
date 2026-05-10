@@ -7,6 +7,31 @@ from dataclasses import dataclass
 
 from app.core.fees import MARKETPLACE_FEE_FIXED, MARKETPLACE_FEE_RATES
 
+# Tiered return-reserve: % baja a medida que sube el precio.
+# Evita que productos caros tengan una reserva desproporcionada.
+_RETURN_RESERVE_TIERS = [
+    (50,   0.05),   # $0–50:   5%
+    (200,  0.03),   # $50–200: 3%
+    (500,  0.02),   # $200–500: 2%
+    (None, 0.01),   # $500+:   1%
+]
+
+
+def compute_return_reserve(sale_price: float) -> float:
+    """Calcula reserva de devolución escalonada por precio."""
+    reserve = 0.0
+    prev = 0.0
+    for ceiling, rate in _RETURN_RESERVE_TIERS:
+        if ceiling is None:
+            reserve += (sale_price - prev) * rate
+            break
+        if sale_price <= ceiling:
+            reserve += (sale_price - prev) * rate
+            break
+        reserve += (ceiling - prev) * rate
+        prev = ceiling
+    return reserve
+
 
 @dataclass
 class ProfitResult:
@@ -42,7 +67,7 @@ def compute_profit(
     fee_rate = fee_rate_override if fee_rate_override is not None else MARKETPLACE_FEE_RATES.get(marketplace, 0.1325)
     fee_fixed = fee_fixed_override if fee_fixed_override is not None else MARKETPLACE_FEE_FIXED.get(marketplace, 0.0)
     marketplace_fees = sale_price * fee_rate + fee_fixed
-    return_reserve = sale_price * return_reserve_pct
+    return_reserve = compute_return_reserve(sale_price)
 
     gross_proceeds = (
         sale_price - marketplace_fees - shipping_cost - packaging_cost - promo_cost
