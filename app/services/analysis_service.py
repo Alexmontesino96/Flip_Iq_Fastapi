@@ -1563,8 +1563,8 @@ async def run_analysis_progressive(
         except Exception:
             pass
 
-    # AI explanation: only for paying tiers (starter, pro)
-    _ai_unlocked = _user_tier in ("starter", "pro")
+    # AI explanation: available for all plans
+    _ai_unlocked = True
 
     explanation_task = None
     if _ai_unlocked:
