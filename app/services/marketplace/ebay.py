@@ -400,16 +400,16 @@ class EbayClient(MarketplaceClient):
     ) -> list[dict] | None:
         """Intenta obtener datos via scraper directo. Usa proxy residencial si está configurado.
 
-        Reintenta UNA vez si obtiene resultados pero muy pocos (< 5),
-        ya que eBay puede servir HTML parcial por sesión/IP.
+        Reintenta hasta 3 veces si obtiene 0 resultados o muy pocos (< 5),
+        ya que eBay puede servir HTML parcial o bloquear por IP rotada.
         """
-        for attempt in range(2):
+        for attempt in range(3):
             try:
                 data = await scrape_sold_listings(
                     query, limit=limit, proxy_url=self._proxy_url,
                     condition=condition, category_id=category_id,
                 )
-                if data and (len(data) >= 5 or attempt == 1):
+                if data and (len(data) >= 5 or attempt == 2):
                     self._last_fetch_meta = {
                         "source": "scraper",
                         "status": "ok" if len(data) >= 5 else "partial",
@@ -417,21 +417,23 @@ class EbayClient(MarketplaceClient):
                     }
                     return data
                 if not data:
-                    logger.warning("Scraper retornó 0 resultados para '%s'", query)
+                    logger.warning("Scraper retornó 0 resultados para '%s' (intento %d/3)", query, attempt + 1)
+                    if attempt < 2:
+                        continue
                     self._last_fetch_meta = {
                         "source": "scraper",
                         "status": "empty",
                         "error_reason": "empty_response",
                     }
                     return None
-                logger.info("Scraper retornó solo %d resultados para '%s', reintentando", len(data), query)
+                logger.info("Scraper retornó solo %d resultados para '%s', reintentando (%d/3)", len(data), query, attempt + 1)
             except Exception as e:
                 # curl_cffi exceptions: HTTPError, Timeout, RequestException
                 exc_name = type(e).__name__
                 status = "blocked"
                 if exc_name == "Timeout":
-                    logger.warning("Scraper timeout para '%s'", query)
-                    if attempt == 0:
+                    logger.warning("Scraper timeout para '%s' (intento %d/3)", query, attempt + 1)
+                    if attempt < 2:
                         continue
                     self._last_fetch_meta = {
                         "source": "scraper",
