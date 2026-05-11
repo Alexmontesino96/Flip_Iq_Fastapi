@@ -1018,6 +1018,13 @@ async def run_analysis_progressive(
     from app.core.llm import reset_gemini
     reset_gemini()
 
+    # Track analysis_started en Customer.io
+    if user_id:
+        from app.services import customerio
+        asyncio.create_task(customerio.track(user_id, "analysis_started",
+            query=barcode or keyword or "",
+        ))
+
     _t_total = time.perf_counter()
 
     def _progress(
