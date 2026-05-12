@@ -99,14 +99,24 @@ def compute_execution(
 
     # Seller concentration / Buy Box accessibility.
     dominant = competition.dominant_seller_share or 0.0
-    if dominant >= 0.90:
-        add("seller_dominance_extreme", "critical", 30, "One seller controls 90%+ of the market.")
-    elif dominant >= 0.80:
-        add("seller_dominance_high", "high", 22, f"One seller controls {dominant:.0%} of the market.")
-    elif dominant >= 0.65:
-        add("seller_dominance_elevated", "medium", 18, f"Top seller controls {dominant:.0%} of the market.")
-    elif dominant >= 0.50:
-        add("seller_dominance_moderate", "medium", 10, f"Top seller controls {dominant:.0%} of the market.")
+    unique = getattr(competition, "unique_sellers", 0) or 0
+
+    if marketplace_name == "amazon_fba":
+        # Amazon: Buy Box competition matters heavily
+        if dominant >= 0.90:
+            add("seller_dominance_extreme", "critical", 30, "One seller controls 90%+ of the market.")
+        elif dominant >= 0.80:
+            add("seller_dominance_high", "high", 22, f"One seller controls {dominant:.0%} of the market.")
+        elif dominant >= 0.65:
+            add("seller_dominance_elevated", "medium", 18, f"Top seller controls {dominant:.0%} of the market.")
+        elif dominant >= 0.50:
+            add("seller_dominance_moderate", "medium", 10, f"Top seller controls {dominant:.0%} of the market.")
+    else:
+        # eBay: No Buy Box. Dominance ≠ blocker. Only penalize thin markets.
+        if unique <= 2 and cleaned.clean_total < 5:
+            add("very_thin_market", "high", 18, f"Only {unique} seller(s) with {cleaned.clean_total} sales. Very thin market.")
+        elif unique <= 1 and cleaned.clean_total < 8:
+            add("thin_market", "medium", 12, f"Only {unique} seller(s) with {cleaned.clean_total} sales. Thin market.")
 
     # Amazon/FBA-specific execution risk.
     if marketplace_name == "amazon_fba":
@@ -118,7 +128,7 @@ def compute_execution(
 
     # Price realism.
     if distribution_shape == "bimodal":
-        add("bimodal_pricing", "medium", 10, "Bimodal pricing means the raw median may not be your executable price.")
+        add("bimodal_pricing", "medium", 6, "Bimodal pricing means the raw median may not be your executable price.")
     elif distribution_shape == "dispersed":
         add("dispersed_pricing", "medium", 10, "Prices are highly dispersed; positioning risk is elevated.")
 
@@ -129,10 +139,23 @@ def compute_execution(
         add("high_price_volatility", "medium", 10, f"High price dispersion (CV={cleaned.cv:.2f}).")
 
     # Demand trend y market stability.
+    # High ROI absorbs demand risk — reseller can drop price and still profit.
+    roi = getattr(profit_market, "roi", 0) or 0
+    if roi > 1.0:
+        roi_dampener = 0.3
+    elif roi > 0.5:
+        roi_dampener = 0.5
+    elif roi > 0.25:
+        roi_dampener = 0.75
+    else:
+        roi_dampener = 1.0
+
     if trend.demand_trend < -50 and trend.confidence != "low":
-        add("demand_declining_fast", "high", 18, f"Demand trend is sharply negative ({trend.demand_trend:+.1f}%).")
+        pts = max(3, round(18 * roi_dampener))
+        add("demand_declining_fast", "high" if pts >= 10 else "medium", pts, f"Demand trend is sharply negative ({trend.demand_trend:+.1f}%).")
     elif trend.demand_trend < -30 and trend.confidence != "low":
-        add("demand_declining", "medium", 12, f"Demand trend is negative ({trend.demand_trend:+.1f}%).")
+        pts = max(2, round(12 * roi_dampener))
+        add("demand_declining", "medium", pts, f"Demand trend is negative ({trend.demand_trend:+.1f}%).")
 
     if risk.score < 50:
         add("market_stability_low", "medium", 12, f"Market stability is weak ({risk.score}/100).")
