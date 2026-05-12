@@ -190,11 +190,11 @@ async def generate_explanation(
         if comparison_text:
             user_msg += comparison_text
 
-        # Tokens dinámicos: más input context → más tokens de salida necesarios.
-        # Base 300 (4 líneas ~110 palabras) + extra si hay comparación/ejecución.
-        base_tokens = 300
+        # Tokens dinámicos: 500 base (4 líneas ~110 palabras con margen)
+        # + extra si hay comparación dual.
+        base_tokens = 500
         if comparison_text:
-            base_tokens += 200  # Comparación dual necesita más contexto en respuesta
+            base_tokens += 200
         max_tokens = min(1200, base_tokens)
 
         response = await client.chat.completions.create(
