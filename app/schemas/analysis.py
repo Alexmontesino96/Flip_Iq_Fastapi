@@ -158,6 +158,7 @@ class CompetitionOut(BaseModel):
     dominant_seller_share: float
     unique_sellers: int
     category: str
+    marketplace: str | None = None
 
 
 class TrendOut(BaseModel):
@@ -167,6 +168,7 @@ class TrendOut(BaseModel):
     burstiness: float
     confidence: str
     category: str
+    marketplace: str | None = None
 
 
 class ListingStrategyOut(BaseModel):
