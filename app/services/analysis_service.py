@@ -2473,8 +2473,8 @@ async def _find_or_create_product(
                 product.avg_sell_price = comps.median_price
             if not product.brand:
                 product.brand = detect_brand(keyword) or detect_brand(product.title)
-            # Fix: actualizar título si contiene frases de condición del eBay listing
-            if keyword and _has_condition_noise(product.title):
+            # Use the user's keyword as title when the DB match is a different variant
+            if keyword and product.title.lower() != keyword.lower():
                 product.title = keyword
             return product
 
