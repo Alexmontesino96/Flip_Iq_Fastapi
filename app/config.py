@@ -75,6 +75,9 @@ class Settings(BaseSettings):
     customerio_site_id: str = ""
     customerio_api_key: str = ""
 
+    # Cron jobs
+    cron_secret: str = ""
+
     # Stripe
     stripe_secret_key: str = ""
     stripe_publishable_key: str = ""
