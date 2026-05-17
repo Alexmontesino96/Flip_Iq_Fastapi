@@ -65,8 +65,20 @@ async def lifespan(app: FastAPI):
 
     await get_redis()
 
+    # Cargar modelos ML locales (si existen)
+    from app.core.ml_models import load_models
+
+    load_models()
+
+    # Start internal scheduler for daily price updates
+    from app.services.scheduler import start_scheduler
+
+    scheduler_task = start_scheduler()
+
     yield
     # Shutdown
+    if scheduler_task:
+        scheduler_task.cancel()
     from app.database import engine
 
     await close_redis()

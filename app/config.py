@@ -77,6 +77,8 @@ class Settings(BaseSettings):
 
     # Cron jobs
     cron_secret: str = ""
+    cron_price_hour: int = 6  # UTC hour to run daily price update (0-23)
+    cron_price_enabled: bool = True  # Enable internal scheduler
 
     # Stripe
     stripe_secret_key: str = ""
