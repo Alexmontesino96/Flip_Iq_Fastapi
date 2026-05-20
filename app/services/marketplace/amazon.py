@@ -51,6 +51,51 @@ def estimate_sales_per_day(sales_rank: int | None) -> float:
 
 MAX_REASONABLE_PRICE = 5000.0  # Cap de sanidad — filtrar precios > $5,000
 
+# Detecta "Pack of 2", "(3 pack)", "Twin Pack", "2-Pack", etc. en títulos de Amazon.
+# Muchos sellers registran packs con el mismo UPC de la unidad individual,
+# lo que contamina los comps con precios de multi-packs.
+_PACK_RE = re.compile(
+    r"(?:"
+    r"\bpack\s+of\s+(\d+)"          # "Pack of 2"
+    r"|\b(\d+)\s*[-\s]?pack\b"      # "3 pack", "3-pack", "2pack"
+    r"|\btwin\s+pack\b"             # "Twin Pack"
+    r"|\btriple\s+pack\b"           # "Triple Pack"
+    r"|\b(\d+)\s*[-\s]?count\b"     # "2 count" (solo si > 1)
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_multipack(title: str) -> bool:
+    """True si el título indica un multi-pack (2+)."""
+    m = _PACK_RE.search(title)
+    if not m:
+        return False
+    # Extraer cantidad del grupo que matcheó
+    qty = m.group(1) or m.group(2) or m.group(3)
+    if qty:
+        return int(qty) > 1
+    # "Twin Pack" o "Triple Pack" sin número
+    return True
+
+
+def _filter_multipacks(products: list[dict]) -> list[dict]:
+    """Filtra multi-packs, conservando solo unidades individuales.
+
+    Si todos son multi-pack, no filtra (datos incompletos > sin datos).
+    """
+    singles = [p for p in products if not _is_multipack(p.get("title") or "")]
+    if singles:
+        removed = len(products) - len(singles)
+        if removed > 0:
+            logger.info(
+                "Keepa: filtrado %d/%d productos multi-pack",
+                removed, len(products),
+            )
+        return singles
+    # Todos son multi-pack — retornar sin filtrar
+    return products
+
 
 def _extract_brand_model(product: dict) -> tuple[str | None, str | None]:
     """Extrae brand y model del producto Keepa."""
@@ -314,6 +359,9 @@ class AmazonClient(MarketplaceClient):
         if not products:
             logger.info("Keepa: sin resultados para barcode=%s keyword=%s", barcode, keyword)
             return CompsResult(marketplace="amazon")
+
+        # Filtrar multi-packs: mismo UPC puede mapear a packs de 2, 3, 6
+        products = _filter_multipacks(products)
 
         # Filtro por product_type: excluir productos cuyo título no contiene el tipo
         if product_type:
