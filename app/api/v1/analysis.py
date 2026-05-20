@@ -18,6 +18,7 @@ from app.models.user import User
 from app.models.manual_review import ManualReviewRequest
 from app.schemas.analysis import (
     AnalysisRequest,
+    AsinAnalysisRequest,
     AnalysisResponse,
     AnalysisHistory,
     FeedbackRequest,
@@ -26,7 +27,7 @@ from app.schemas.analysis import (
     NotFoundItem,
     ProductDetailSubmission,
 )
-from app.services.analysis_service import run_analysis, run_analysis_progressive, _analysis_semaphore
+from app.services.analysis_service import run_analysis, run_analysis_asin, run_analysis_progressive, _analysis_semaphore
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,53 @@ async def analyze_product(
     await increment_analysis_counter(request, redis, gate, user=user)
 
     # Rate-limit headers on the normal response
+    remaining = max(gate.remaining - 1, 0)
+    response.headers["X-RateLimit-Remaining"] = str(remaining)
+    response.headers["X-RateLimit-Tier"] = gate.tier
+    return result
+
+
+@router.post("/asin", response_model=AnalysisResponse)
+async def analyze_by_asin(
+    request: Request,
+    response: Response,
+    payload: AsinAnalysisRequest,
+    db: AsyncSession = Depends(get_db),
+    redis=Depends(get_redis),
+    user: User | None = Depends(get_current_user_optional),
+):
+    """Análisis Amazon-only por ASIN directo (sin búsqueda keyword/barcode)."""
+    gate = await check_analysis_gate(request, redis, db, user=user)
+    if not gate.allowed:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "reason": "limit_reached",
+                "tier": gate.tier,
+                "remaining": gate.remaining,
+                "reset_in_seconds": gate.reset_in,
+            },
+        )
+
+    current_user_id = user.id if user else None
+
+    result = await run_analysis_asin(
+        asin=payload.asin,
+        cost_price=payload.cost_price,
+        shipping_cost=payload.shipping_cost,
+        packaging_cost=payload.packaging_cost,
+        prep_cost=payload.prep_cost,
+        promo_cost=payload.promo_cost,
+        return_reserve_pct=payload.return_reserve_pct,
+        target_profit=payload.target_profit,
+        target_roi=payload.target_roi,
+        condition=payload.condition,
+        mode=payload.mode,
+        user_id=current_user_id,
+    )
+
+    await increment_analysis_counter(request, redis, gate, user=user)
+
     remaining = max(gate.remaining - 1, 0)
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     response.headers["X-RateLimit-Tier"] = gate.tier

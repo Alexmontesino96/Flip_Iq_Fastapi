@@ -429,3 +429,101 @@ class AmazonClient(MarketplaceClient):
         )
 
         return result
+
+    def _build_comps_from_products(
+        self,
+        products: list[dict],
+        days: int,
+        limit: int,
+        label: str,
+    ) -> CompsResult:
+        """Mapea productos Keepa a CompsResult (lógica compartida)."""
+        all_listings: list[MarketplaceListing] = []
+        best_rank: int | None = None
+        image_url: str | None = None
+        referral_pcts: list[float] = []
+        fulfillment_fees: list[float] = []
+
+        for product in products:
+            all_listings.extend(_map_keepa_offers(product))
+            all_listings.extend(_map_buybox_history(product, days=days))
+
+            rank = None
+            stats = product.get("stats")
+            if stats:
+                rank = stats.get("salesRankReference") or stats.get("current", [None] * 4)[CSV_SALES_RANK]
+            if rank and (best_rank is None or rank < best_rank):
+                best_rank = rank
+
+            if not image_url:
+                images_csv = product.get("imagesCSV")
+                if images_csv:
+                    first_hash = images_csv.split(",")[0].strip()
+                    if first_hash:
+                        image_url = f"https://images-na.ssl-images-amazon.com/images/I/{first_hash}"
+
+            ref_pct = product.get("referralFeePercentage")
+            if ref_pct is not None and ref_pct > 0:
+                referral_pcts.append(ref_pct / 100.0)
+
+            fba_fees = product.get("fbaFees")
+            if fba_fees and isinstance(fba_fees, dict):
+                pick_pack = fba_fees.get("pickAndPackFee")
+                if pick_pack is not None and pick_pack > 0:
+                    fulfillment_fees.append(pick_pack / 100.0)
+
+        if not all_listings:
+            logger.info("Keepa: productos encontrados pero sin listings mapeables")
+            return CompsResult(marketplace="amazon")
+
+        all_listings = all_listings[:limit]
+
+        result = CompsResult.from_listings(all_listings, marketplace="amazon", days=days)
+        result.image_url = image_url
+
+        if referral_pcts:
+            result.fba_referral_pct = round(
+                sum(referral_pcts) / len(referral_pcts), 4,
+            )
+        if fulfillment_fees:
+            result.fba_fulfillment_fee = round(
+                sum(fulfillment_fees) / len(fulfillment_fees), 2,
+            )
+        if referral_pcts or fulfillment_fees:
+            logger.info(
+                "Keepa fees: referral=%.1f%%, fulfillment=$%.2f (from %d products)",
+                (result.fba_referral_pct or 0) * 100,
+                result.fba_fulfillment_fee or 0,
+                len(products),
+            )
+
+        if best_rank:
+            result.sales_per_day = estimate_sales_per_day(best_rank)
+
+        logger.info(
+            "Keepa: %d listings para '%s' (rank=%s, spd=%.1f)",
+            len(all_listings),
+            label,
+            best_rank,
+            result.sales_per_day,
+        )
+
+        return result
+
+    async def get_sold_comps_by_asin(
+        self,
+        asin: str,
+        days: int = 30,
+        limit: int = 50,
+    ) -> CompsResult:
+        """Obtiene comps de Amazon por ASIN directo (sin búsqueda)."""
+        if not self._api_key:
+            logger.info("No KEEPA_API_KEY, retornando CompsResult vacío")
+            return CompsResult(marketplace="amazon")
+
+        products = await self._keepa_product([asin])
+        if not products:
+            logger.info("Keepa: sin resultados para ASIN=%s", asin)
+            return CompsResult(marketplace="amazon")
+
+        return self._build_comps_from_products(products, days, limit, label=asin)

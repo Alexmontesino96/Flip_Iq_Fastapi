@@ -884,15 +884,20 @@ def _validate_buy(
     """Validador pre-BUY. Puede degradar 'buy' a 'buy_small' o 'watch' con warnings."""
     warnings: list[str] = []
 
-    if max_buy is not None and max_buy.recommended_max > 0 and cost_price > max_buy.recommended_max:
-        overpay = cost_price - max_buy.recommended_max
+    if max_buy is not None and max_buy.breakeven > 0 and cost_price > max_buy.breakeven:
+        overpay = cost_price - max_buy.breakeven
         warnings.append(
-            f"Your cost (${cost_price:.2f}) exceeds the recommended max "
-            f"(${max_buy.recommended_max:.2f}) by ${overpay:.2f}. "
-            f"At ${max_buy.recommended_max:.2f} or less, it would be profitable."
+            f"Your cost (${cost_price:.2f}) exceeds breakeven "
+            f"(${max_buy.breakeven:.2f}) by ${overpay:.2f}. "
+            f"You would lose money on every sale."
         )
         if recommendation in ("buy", "buy_small"):
             recommendation = "watch"
+    elif max_buy is not None and max_buy.max_by_roi > 0 and cost_price > max_buy.max_by_roi:
+        warnings.append(
+            f"Your cost (${cost_price:.2f}) exceeds the max for 35% ROI "
+            f"(${max_buy.max_by_roi:.2f}). Profit is thin."
+        )
 
     if confidence.score < 50:
         warnings.append(
@@ -2253,6 +2258,514 @@ async def _run_analysis_inner(
             if ai_data.id is not None:
                 result.id = ai_data.id
     return result
+
+
+# ---------------------------------------------------------------------------
+# Análisis solo Amazon por ASIN
+# ---------------------------------------------------------------------------
+
+async def run_analysis_asin(
+    asin: str,
+    cost_price: float,
+    shipping_cost: float = 0.0,
+    packaging_cost: float = 0.0,
+    prep_cost: float = 0.0,
+    promo_cost: float = 0.0,
+    return_reserve_pct: float = 0.05,
+    target_profit: float = 10.0,
+    target_roi: float = 0.35,
+    condition: str = "any",
+    mode: str = "standard",
+    user_id: int | None = None,
+) -> AnalysisResponse:
+    """Análisis Amazon-only por ASIN directo.
+
+    Flujo simplificado: ASIN → Keepa → pipeline Amazon → AI → response.
+    No ejecuta eBay ni búsqueda por keyword.
+    """
+    async with _analysis_semaphore:
+        _t_total = time.perf_counter()
+        marketplace = "amazon_fba"
+
+        # 1. Fetch Amazon comps por ASIN directo
+        amazon = _get_amazon_client()
+        amazon_raw = await amazon.get_sold_comps_by_asin(asin, days=30, limit=50)
+
+        # Extraer keyword del título del producto para el pipeline
+        keyword = asin  # fallback
+        if amazon_raw.listings:
+            first_title = amazon_raw.listings[0].title
+            if first_title:
+                keyword = first_title
+
+        # 2. Categorización del producto
+        category_result = None
+        category_slug = None
+        config: ResolvedConfig | None = None
+        try:
+            category_result = await categorize_product(keyword)
+            if category_result:
+                category_slug = map_to_category_slug(category_result.category)
+                config = resolve_config(category_slug, marketplace)
+        except Exception as e:
+            logger.warning("Product categorization failed: %s", e)
+
+        # 3. Pipeline Amazon
+        has_comps = amazon_raw.total_sold > 0
+        if has_comps:
+            pipeline = _run_pipeline(
+                raw_comps=amazon_raw,
+                keyword=keyword,
+                condition=condition,
+                cost_price=cost_price,
+                marketplace_name=marketplace,
+                shipping_cost=shipping_cost,
+                packaging_cost=packaging_cost,
+                prep_cost=prep_cost,
+                promo_cost=promo_cost,
+                return_reserve_pct=return_reserve_pct,
+                target_profit=target_profit,
+                target_roi=target_roi,
+                enriched=False,
+                product_type=category_result.category if category_result else None,
+                config=config,
+            )
+        else:
+            # Pipeline vacío para generar una respuesta "pass"
+            pipeline = _run_pipeline(
+                raw_comps=amazon_raw,
+                keyword=keyword,
+                condition=condition,
+                cost_price=cost_price,
+                marketplace_name=marketplace,
+            )
+
+        primary = pipeline
+        has_valid_comps = primary.has_valid_comps
+
+        # Scores
+        market_score = primary.opportunity if has_valid_comps else 0
+        execution_score = primary.execution.score if primary.execution else 0
+        final_score = _compute_final_score(market_score, execution_score)
+
+        # 4. AI explanation (async) — include execution text like main flow
+        execution_text = _build_execution_text(
+            primary=primary,
+            best_profit_marketplace="amazon_fba",
+            recommended_marketplace="amazon_fba",
+            final_score=final_score,
+        )
+        explanation_task = None
+        if has_valid_comps:
+            explanation_task = asyncio.create_task(generate_explanation(
+                keyword=keyword,
+                cost_price=cost_price,
+                marketplace=marketplace,
+                pricing=primary.pricing,
+                profit_market=primary.profit_market,
+                max_buy=primary.max_buy,
+                velocity=primary.velocity,
+                risk=primary.risk,
+                confidence=primary.confidence,
+                competition=primary.competition,
+                trend=primary.trend,
+                listing=primary.listing,
+                opportunity_score=primary.opportunity,
+                recommendation=primary.recommendation,
+                cleaned_total=primary.cleaned.clean_total,
+                raw_total=primary.cleaned.raw_total,
+                comparison_text=execution_text,
+            ))
+
+        intel_task = None
+        if mode == "premium" and has_valid_comps:
+            intel_task = asyncio.create_task(compute_market_intelligence(
+                keyword=keyword,
+                marketplace=marketplace,
+                cleaned_total=primary.cleaned.clean_total,
+                median_price=primary.cleaned.median_price,
+                min_price=primary.cleaned.min_price,
+                max_price=primary.cleaned.max_price,
+                sales_per_day=primary.cleaned.sales_per_day,
+                demand_trend=primary.trend.demand_trend,
+                price_trend=primary.trend.price_trend,
+            ))
+
+        # 5. Persist producto
+        from app.database import async_session as _sf
+        product = None
+        analysis_id = None
+        try:
+            async with _sf() as _db:
+                product = await _find_or_create_product(
+                    _db, None, keyword, amazon_raw, None,
+                )
+                if product and not product.image_url and amazon_raw.image_url:
+                    product.image_url = amazon_raw.image_url
+                await _db.commit()
+
+                # 6. Build response
+                estimated_sale = primary.pricing.market_list if has_valid_comps else None
+
+                # Channels: solo Amazon
+                channels = None
+                if has_valid_comps:
+                    channels = _calculate_all_channels(
+                        cost_price, primary.pricing.market_list,
+                        shipping_cost=shipping_cost, packaging_cost=packaging_cost,
+                        prep_cost=prep_cost, promo_cost=promo_cost,
+                        return_reserve_pct=return_reserve_pct,
+                        has_own_data={"amazon_fba"},
+                    )
+                    if channels:
+                        p = primary.profit_market
+                        sale = primary.pricing.market_list
+                        for i, ch in enumerate(channels):
+                            if ch.marketplace != marketplace:
+                                continue
+                            channels[i] = ChannelBreakdown(
+                                marketplace=marketplace,
+                                estimated_sale_price=sale,
+                                net_proceeds=round(p.risk_adjusted_net, 2),
+                                profit=round(p.profit, 2),
+                                roi_pct=round(p.roi * 100, 2) if math.isfinite(p.roi) else 0,
+                                margin_pct=round(p.margin * 100, 2) if math.isfinite(p.margin) else 0,
+                                is_estimated=False,
+                            )
+                            break
+                        channels.sort(key=lambda c: c.profit, reverse=True)
+                        _assign_channel_labels(channels)
+                        _attach_execution_to_channels(
+                            channels,
+                            [primary],
+                            recommended_marketplace="amazon_fba",
+                            best_profit_marketplace="amazon_fba",
+                        )
+
+                # Summary — use best real channel profit like main flow
+                signal_map = {"buy": "positive", "buy_small": "positive", "watch": "caution", "pass": "negative"}
+                best_max_buy = primary.max_buy.recommended_max if has_valid_comps else 0.0
+                headroom = (best_max_buy - cost_price) if has_valid_comps else 0.0
+
+                if has_valid_comps and channels:
+                    real_channels = [ch for ch in channels if not ch.is_estimated]
+                    if real_channels:
+                        best_channel = max(real_channels, key=lambda ch: ch.profit)
+                        summary_profit = best_channel.profit
+                        summary_roi = best_channel.roi_pct
+                        summary_margin = best_channel.margin_pct
+                    else:
+                        summary_profit = primary.profit_market.profit
+                        _roi = primary.profit_market.roi
+                        summary_roi = round(_roi * 100, 2) if math.isfinite(_roi) else 0.0
+                        summary_margin = round(primary.profit_market.margin * 100, 2)
+                elif has_valid_comps:
+                    summary_profit = primary.profit_market.profit
+                    _roi = primary.profit_market.roi
+                    summary_roi = round(_roi * 100, 2) if math.isfinite(_roi) else 0.0
+                    summary_margin = round(primary.profit_market.margin * 100, 2)
+                else:
+                    summary_profit = 0.0
+                    summary_roi = 0.0
+                    summary_margin = 0.0
+
+                scores = ScoreBreakdown(
+                    flip_score=primary.opportunity,
+                    velocity=primary.velocity.score,
+                    risk=primary.risk.score,
+                    risk_label=primary.risk.category,
+                    confidence=primary.confidence.score,
+                    confidence_label=primary.confidence.category,
+                    temporal_window_expanded=primary.cleaned.temporal_window_expanded,
+                    execution_score=primary.execution.score if primary.execution else None,
+                    win_probability=primary.execution.win_probability if primary.execution else None,
+                    final_score=final_score,
+                ) if has_valid_comps else None
+
+                summary = AnalysisSummary(
+                    recommendation=primary.recommendation,
+                    signal=signal_map.get(primary.recommendation, "neutral"),
+                    buy_box=BuyBox(
+                        recommended_max_buy=best_max_buy,
+                        your_cost=cost_price,
+                        headroom=round(headroom, 2),
+                    ),
+                    sale_plan=SalePlan(
+                        recommended_list_price=primary.pricing.market_list if has_valid_comps else 0.0,
+                        quick_sale_price=primary.pricing.quick_list if has_valid_comps else 0.0,
+                        stretch_price=(primary.pricing.stretch_list if primary.pricing.stretch_allowed else None) if has_valid_comps else None,
+                    ),
+                    returns=Returns(
+                        profit=summary_profit,
+                        roi_pct=summary_roi,
+                        margin_pct=summary_margin,
+                    ),
+                    risk=primary.risk.category,
+                    confidence=primary.confidence.category,
+                    warnings=[],
+                    scores=scores,
+                )
+
+                amazon_analysis = _pipeline_to_marketplace_analysis(primary)
+
+                product_summary = ProductSummary(
+                    id=product.id if product else 0,
+                    barcode=None,
+                    title=product.title if product else keyword,
+                    brand=product.brand if product else None,
+                    image_url=product.image_url if product else (amazon_raw.image_url or None),
+                )
+
+                top_net_profit = summary_profit if has_valid_comps else None
+                top_margin = summary_margin if has_valid_comps else None
+                top_roi = summary_roi if has_valid_comps else None
+
+                # Persist analysis
+                if product is not None:
+                    try:
+                        analysis = Analysis(
+                            user_id=user_id,
+                            product_id=product.id,
+                            cost_price=cost_price,
+                            marketplace=marketplace,
+                            estimated_sale_price=estimated_sale,
+                            net_profit=top_net_profit,
+                            margin_pct=top_margin,
+                            roi_pct=top_roi,
+                            flip_score=primary.opportunity if has_valid_comps else None,
+                            risk_score=primary.risk.score if has_valid_comps else None,
+                            velocity_score=primary.velocity.score if has_valid_comps else None,
+                            confidence_score=primary.confidence.score,
+                            opportunity_score=primary.opportunity,
+                            recommendation=primary.recommendation,
+                            channels=[c.model_dump() for c in channels] if channels else None,
+                            engines_data=None,
+                            ai_explanation=None,
+                            shipping_cost=shipping_cost,
+                            prep_cost=prep_cost,
+                            no_comps_found=not has_valid_comps,
+                        )
+                        _db.add(analysis)
+                        await _db.commit()
+                        await _db.refresh(analysis)
+                        analysis_id = analysis.id
+                    except Exception as e:
+                        logger.warning("DB persist failed: %s", e)
+                        try:
+                            await _db.rollback()
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.warning("DB unavailable, skipping persistence: %s", e)
+
+        # 7. Await AI
+        ai_explanation = None
+        if explanation_task is not None:
+            try:
+                ai_explanation = await explanation_task
+            except Exception as e:
+                logger.warning("AI explanation failed: %s", e)
+
+        market_intel = None
+        if intel_task is not None:
+            try:
+                market_intel = await intel_task
+            except Exception as e:
+                logger.warning("Market intelligence failed: %s", e)
+
+        # 8. Post-intelligence adjustments
+        risk = primary.risk
+        opportunity = primary.opportunity
+        recommendation = primary.recommendation
+        warnings: list[str] = []
+
+        if market_intel is not None:
+            if market_intel.depreciation_risk > 70:
+                penalty = min(15, (market_intel.depreciation_risk - 70) // 2)
+                risk = type(risk)(
+                    score=max(0, risk.score - penalty),
+                    category=risk.category,
+                    factors=risk.factors,
+                )
+                if risk.score < 30:
+                    risk = type(risk)(score=risk.score, category="high", factors=risk.factors)
+                elif risk.score < 60:
+                    risk = type(risk)(score=risk.score, category="medium", factors=risk.factors)
+
+            if market_intel.product_lifecycle == "end_of_life":
+                risk = type(risk)(
+                    score=max(0, risk.score - 10),
+                    category=risk.category,
+                    factors=risk.factors,
+                )
+                if risk.score < 30:
+                    risk = type(risk)(score=risk.score, category="high", factors=risk.factors)
+                elif risk.score < 60:
+                    risk = type(risk)(score=risk.score, category="medium", factors=risk.factors)
+
+            seasonal_adj = round(market_intel.seasonal_factor * 10)
+            opportunity = max(0, min(100, opportunity + seasonal_adj))
+
+            for ev in market_intel.market_events:
+                if ev.impact == "negative" and ev.relevance == "high":
+                    warnings.append(f"Market event: {ev.event}")
+
+            if (
+                market_intel.timing_recommendation == "wait"
+                and recommendation in ("buy", "buy_small")
+                and market_intel.confidence == "high"
+            ):
+                recommendation = "watch"
+                warnings.append("Market intelligence recommends waiting before buying.")
+
+        # Rebuild summary with final values
+        market_intel_out = None
+        if market_intel and has_valid_comps:
+            market_intel_out = MarketIntelligenceOut(
+                product_lifecycle=market_intel.product_lifecycle,
+                depreciation_risk=market_intel.depreciation_risk,
+                seasonal_factor=market_intel.seasonal_factor,
+                market_events=[
+                    MarketEventOut(event=e.event, impact=e.impact, relevance=e.relevance)
+                    for e in market_intel.market_events
+                ],
+                timing_recommendation=market_intel.timing_recommendation,
+                intelligence_summary=market_intel.intelligence_summary,
+                confidence=market_intel.confidence,
+                search_source=market_intel.search_source,
+            )
+
+        signal_map = {"buy": "positive", "buy_small": "positive", "watch": "caution", "pass": "negative"}
+        final_scores = None
+        if scores is not None:
+            final_scores = ScoreBreakdown(
+                flip_score=opportunity,
+                velocity=scores.velocity,
+                risk=risk.score,
+                risk_label=risk.category,
+                confidence=scores.confidence,
+                confidence_label=scores.confidence_label,
+                temporal_window_expanded=scores.temporal_window_expanded,
+                execution_score=scores.execution_score,
+                win_probability=scores.win_probability,
+                final_score=scores.final_score,
+            )
+
+        final_summary = AnalysisSummary(
+            recommendation=recommendation,
+            signal=signal_map.get(recommendation, "neutral"),
+            buy_box=summary.buy_box if has_valid_comps else BuyBox(recommended_max_buy=0, your_cost=cost_price, headroom=0),
+            sale_plan=summary.sale_plan if has_valid_comps else SalePlan(recommended_list_price=0, quick_sale_price=0, stretch_price=None),
+            returns=Returns(
+                profit=summary_profit if has_valid_comps else 0,
+                roi_pct=summary_roi if has_valid_comps else 0,
+                margin_pct=summary_margin if has_valid_comps else 0,
+            ),
+            risk=risk.category,
+            confidence=primary.confidence.category,
+            warnings=_dedupe_warnings(warnings),
+            scores=final_scores,
+        )
+
+        # 9. Update DB with AI + engines
+        if analysis_id is not None:
+            engines_data = {
+                "pricing": asdict(primary.pricing),
+                "profit_market": asdict(primary.profit_market),
+                "profit_quick": asdict(primary.profit_quick),
+                "max_buy": asdict(primary.max_buy),
+                "velocity": asdict(primary.velocity),
+                "risk": asdict(risk),
+                "confidence": asdict(primary.confidence),
+                "seller_premium": asdict(primary.seller),
+                "competition": asdict(primary.competition),
+                "trend": asdict(primary.trend),
+                "listing_strategy": asdict(primary.listing),
+                "title_risk": asdict(primary.title_risk),
+                "condition_analysis": primary.condition_analysis.model_dump(),
+                "opportunity_score": opportunity,
+                "market_score": market_score,
+                "execution_score": execution_score,
+                "final_score": final_score,
+                "execution": asdict(primary.execution) if primary.execution else None,
+                "market_intelligence": asdict(market_intel) if market_intel else None,
+                "cleaned_comps": {
+                    "raw_total": primary.cleaned.raw_total,
+                    "clean_total": primary.cleaned.clean_total,
+                    "outliers_removed": primary.cleaned.outliers_removed,
+                    "relevance_filtered": primary.cleaned.relevance_filtered,
+                    "cv": primary.cleaned.cv,
+                    "median_price": primary.cleaned.median_price,
+                    "p25": primary.cleaned.p25,
+                    "p75": primary.cleaned.p75,
+                    "days_of_data": primary.cleaned.days_of_data,
+                },
+                "marketplace_engines": {
+                    "amazon": _pipeline_to_engines_dict(primary),
+                },
+                "sample_comps": [s.model_dump() for s in _select_sample_comps(primary.cleaned)],
+            }
+            try:
+                async with _sf() as _upd_db:
+                    from sqlalchemy import update
+                    await _upd_db.execute(
+                        update(Analysis).where(Analysis.id == analysis_id).values(
+                            ai_explanation=ai_explanation if has_valid_comps else None,
+                            flip_score=opportunity if has_valid_comps else None,
+                            risk_score=risk.score if has_valid_comps else None,
+                            recommendation=recommendation,
+                            engines_data=engines_data,
+                        )
+                    )
+                    await _upd_db.commit()
+            except Exception as e:
+                logger.warning("DB update (AI fields) failed: %s", e)
+
+        logger.info(
+            "ASIN ANALYSIS asin=%s keyword=%r cost=%.2f sale=%.2f profit=%s "
+            "opportunity=%d recommendation=%s comps=%d/%d total=%.1fs",
+            asin, keyword, cost_price,
+            estimated_sale or 0,
+            f"${top_net_profit:.2f}" if top_net_profit is not None else "N/A",
+            opportunity, recommendation,
+            primary.cleaned.clean_total, primary.cleaned.raw_total,
+            time.perf_counter() - _t_total,
+        )
+
+        return AnalysisResponse(
+            id=analysis_id,
+            product=product_summary,
+            cost_price=cost_price,
+            marketplace=marketplace,
+            estimated_sale_price=estimated_sale,
+            net_profit=top_net_profit,
+            margin_pct=top_margin,
+            roi_pct=top_roi,
+            flip_score=opportunity if has_valid_comps else None,
+            risk_score=risk.score if has_valid_comps else None,
+            velocity_score=primary.velocity.score if has_valid_comps else None,
+            recommendation=recommendation,
+            channels=channels,
+            summary=final_summary,
+            ai_explanation=ai_explanation if has_valid_comps else None,
+            ai_locked=False,
+            market_intelligence=market_intel_out,
+            detected_category=category_result.category if category_result else None,
+            category_confidence=category_result.confidence if category_result else None,
+            category_slug=category_slug,
+            no_comps_found=not has_valid_comps,
+            sample_comps=_select_sample_comps(primary.cleaned),
+            ebay_analysis=None,
+            amazon_analysis=amazon_analysis,
+            best_marketplace="amazon",
+            best_marketplace_reason="asin_direct",
+            best_profit_marketplace="amazon",
+            recommended_marketplace="amazon",
+            execution_analysis=_execution_to_schema(primary.execution) if primary.execution else None,
+            market_score=market_score,
+            final_score=final_score,
+            created_at=datetime.now(timezone.utc),
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -33,6 +33,42 @@ class AnalysisRequest(BaseModel):
     product_type: str | None = None  # Override manual del tipo de producto
 
 
+class AsinAnalysisRequest(BaseModel):
+    """Solicitud de análisis Amazon por ASIN directo."""
+    asin: str
+    cost_price: float
+    shipping_cost: float = 0.0
+    packaging_cost: float = 0.0
+    prep_cost: float = 0.0
+    promo_cost: float = 0.0
+    return_reserve_pct: float = 0.05
+    target_profit: float = 10.0
+    target_roi: float = 0.35
+    detailed: bool = False
+    condition: str = "any"
+    mode: str = "standard"
+
+    @field_validator("asin")
+    @classmethod
+    def asin_must_be_valid(cls, v: str) -> str:
+        v = v.strip().upper()
+        if len(v) != 10 or not v.isalnum():
+            raise ValueError(
+                "ASIN must be exactly 10 alphanumeric characters (e.g. B08N5WRWNW)."
+            )
+        return v
+
+    @field_validator("cost_price")
+    @classmethod
+    def cost_price_must_be_positive_asin(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(
+                "cost_price must be greater than 0. "
+                "Enter the actual product cost to get accurate ROI and profit calculations."
+            )
+        return v
+
+
 class ChannelBreakdown(BaseModel):
     marketplace: str
     estimated_sale_price: float
@@ -123,6 +159,7 @@ class MaxBuyOut(BaseModel):
     max_by_profit: float
     max_by_roi: float
     recommended_max: float
+    breakeven: float = 0.0
 
 
 class VelocityOut(BaseModel):

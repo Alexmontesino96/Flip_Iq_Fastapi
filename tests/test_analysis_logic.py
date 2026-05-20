@@ -224,13 +224,13 @@ def test_validate_buy_headroom_negative_degrades_to_watch():
     cleaned = CleanedComps(clean_total=20, raw_total=25, requested_condition="any",
                            condition_match_rate=1.0, condition_filtered=0)
     profit = compute_profit(100.0, 70.0, "ebay")
-    max_buy = MaxBuyResult(max_by_profit=63.0, max_by_roi=60.0, recommended_max=63.0)
+    max_buy = MaxBuyResult(max_by_profit=63.0, max_by_roi=60.0, recommended_max=63.0, breakeven=63.0)
     rec, warnings = _validate_buy(
         "buy_small", confidence, title_risk, cleaned, profit,
         max_buy=max_buy, cost_price=70.0,
     )
     assert rec == "watch"
-    assert any("exceeds the recommended max" in w for w in warnings)
+    assert any("exceeds breakeven" in w for w in warnings)
     assert any("$63.00" in w for w in warnings)
 
 
@@ -245,7 +245,7 @@ def test_validate_buy_headroom_positive_no_degrade():
     cleaned = CleanedComps(clean_total=20, raw_total=25, requested_condition="any",
                            condition_match_rate=1.0, condition_filtered=0)
     profit = compute_profit(150.0, 50.0, "ebay")
-    max_buy = MaxBuyResult(max_by_profit=80.0, max_by_roi=75.0, recommended_max=80.0)
+    max_buy = MaxBuyResult(max_by_profit=80.0, max_by_roi=75.0, recommended_max=80.0, breakeven=80.0)
     rec, warnings = _validate_buy(
         "buy", confidence, title_risk, cleaned, profit,
         max_buy=max_buy, cost_price=50.0,
@@ -572,7 +572,7 @@ def test_validate_buy_condition_warning_includes_subset_profit():
         condition_subset_count=2, condition_subset_median=275.0,
     )
     profit = compute_profit(200.0, 160.0, "ebay")
-    max_buy = MaxBuyResult(max_by_profit=130.0, max_by_roi=120.0, recommended_max=130.0)
+    max_buy = MaxBuyResult(max_by_profit=130.0, max_by_roi=120.0, recommended_max=130.0, breakeven=200.0)
     subset_pricing = {
         "count": 2, "median": 275.0, "profit": 45.50,
         "roi_pct": 28.4, "margin_pct": 16.5, "max_buy": 180.0,
