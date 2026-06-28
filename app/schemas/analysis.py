@@ -281,6 +281,12 @@ class MarketplaceAnalysis(BaseModel):
     condition_analysis: ConditionAnalysisOut | None = None
     execution_analysis: ExecutionAnalysisOut | None = None
     warnings: list[str] = []
+    # Guard de multipack (advisory — NO afecta net_profit/roi_pct nominal).
+    is_likely_multipack: bool = False
+    bundle_factor: int | None = None
+    corrected_profit: float | None = None
+    corrected_roi_pct: float | None = None
+    multipack_reason: str | None = None  # "fee_ratio" | "package_quantity" | "title_bundle"
 
 
 class MarketEventOut(BaseModel):

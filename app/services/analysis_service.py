@@ -76,7 +76,13 @@ from app.services.engines.execution_engine import (
 from app.services.engines.listing_strategy import compute_listing_strategy
 from app.services.engines.max_buy_price import compute_max_buy
 from app.services.engines.pricing_engine import compute_pricing
+from app.services.engines.cost_integrity import (
+    corrected_metrics,
+    multipack_mismatch_reason,
+)
 from app.services.engines.profit_engine import compute_profit
+from app.services.engines.size_match import detect_size_mismatch
+from app.services.marketplace.multipack import regex_bundle_factor
 from app.services.engines.risk_engine import compute_risk
 from app.services.engines.seller_premium import compute_seller_premium
 from app.services.engines.title_risk import compute_title_risk
@@ -271,6 +277,13 @@ class _PipelineResult:
     comps_info: CompsInfo | None
     estimated_sale: float | None
     execution: ExecutionResult | None = None
+    # PR-M3: guard de integridad de coste (multipack) — advisory, no afecta
+    # profit/roi nominal (invariante AC-3).
+    is_likely_multipack: bool = False
+    bundle_factor: int | None = None
+    corrected_profit: float | None = None
+    corrected_roi_pct: float | None = None
+    multipack_reason: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -416,6 +429,33 @@ def _run_pipeline(
     clean_prices = sorted(l.total_price for l in cleaned.listings if l.total_price)
     distribution_shape = _detect_distribution_shape(clean_prices) if cleaned.clean_total > 0 else "unknown"
 
+    # ── Guard de integridad de coste (PR-M3, port de BatchFlip) ──
+    # El cost_price del usuario es por unidad, pero market_list puede ser de un
+    # multipack o de otro tamaño → ROI fantasma. Detecta el mismatch (3 gates +
+    # size como red secundaria) y calcula el ROI corregido, SIN tocar profit/roi.
+    mp_bundle_factor: int | None = None
+    mp_reason: str | None = None
+    mp_corrected_profit: float | None = None
+    mp_corrected_roi: float | None = None
+    size_mismatch = False
+    if marketplace_name == "amazon_fba" and pricing.market_list > 0:
+        mp_bundle_factor = regex_bundle_factor(raw_comps.evaluated_title)
+        mp_reason = multipack_mismatch_reason(
+            cost_unit=cost_price,
+            keepa_fba_fee=raw_comps.fba_fulfillment_fee,
+            package_quantity=raw_comps.evaluated_package_quantity,
+            bundle_factor=mp_bundle_factor,
+        )
+        if mp_reason is None:
+            # Precedencia: size solo si el guard de multipack no disparó.
+            size_mismatch = detect_size_mismatch(raw_comps.evaluated_title, keyword)
+        if mp_bundle_factor and mp_bundle_factor > 1:
+            mp_corrected_profit, mp_corrected_roi = corrected_metrics(
+                nominal_profit=profit_market.profit,
+                cost_unit=cost_price,
+                bundle_factor=mp_bundle_factor,
+            )
+
     # Decisión + Validador
     recommendation = _decide(opportunity, profit_market, risk, confidence)
     recommendation, warnings = _validate_buy(
@@ -423,6 +463,15 @@ def _run_pipeline(
         max_buy=max_buy, cost_price=cost_price,
         distribution_shape=distribution_shape,
         condition_subset_pricing=condition_subset_pricing,
+        multipack_reason=mp_reason,
+        size_mismatch=size_mismatch,
+        bundle_factor=mp_bundle_factor,
+        corrected_roi_pct=mp_corrected_roi,
+        market_price=pricing.market_list,
+        nominal_roi_pct=(
+            round(profit_market.roi * 100, 2)
+            if math.isfinite(profit_market.roi) else 0.0
+        ),
     )
 
     for warning in cleaned.data_quality_warnings:
@@ -540,6 +589,11 @@ def _run_pipeline(
         comps_info=comps_info,
         estimated_sale=estimated_sale,
         execution=execution,
+        is_likely_multipack=mp_reason is not None,
+        bundle_factor=mp_bundle_factor,
+        corrected_profit=mp_corrected_profit,
+        corrected_roi_pct=mp_corrected_roi,
+        multipack_reason=mp_reason,
     )
 
 
@@ -569,6 +623,11 @@ def _pipeline_to_marketplace_analysis(p: _PipelineResult) -> MarketplaceAnalysis
         condition_analysis=p.condition_analysis,
         execution_analysis=_execution_to_schema(p.execution) if p.execution else None,
         warnings=p.warnings,
+        is_likely_multipack=p.is_likely_multipack,
+        bundle_factor=p.bundle_factor,
+        corrected_profit=p.corrected_profit,
+        corrected_roi_pct=p.corrected_roi_pct,
+        multipack_reason=p.multipack_reason,
     )
 
 
@@ -880,9 +939,47 @@ def _validate_buy(
     cost_price: float = 0.0,
     distribution_shape: str = "unknown",
     condition_subset_pricing: dict | None = None,
+    multipack_reason: str | None = None,
+    size_mismatch: bool = False,
+    bundle_factor: int | None = None,
+    corrected_roi_pct: float | None = None,
+    market_price: float = 0.0,
+    nominal_roi_pct: float = 0.0,
 ) -> tuple[str, list[str]]:
     """Validador pre-BUY. Puede degradar 'buy' a 'buy_small' o 'watch' con warnings."""
     warnings: list[str] = []
+
+    # ── Guard de integridad de coste (multipack / size) — PR-M3 ──
+    # El coste es por unidad pero el precio puede ser de un pack/otro tamaño →
+    # ROI fantasma. Degrada y avisa SIN tocar profit/roi (AC-3). Precedencia:
+    # multipack manda; size solo si aquél no disparó.
+    if multipack_reason:
+        if bundle_factor and bundle_factor > 1 and corrected_roi_pct is not None:
+            warnings.append(
+                f"This Amazon listing looks like a {bundle_factor}-pack. Your cost "
+                f"(${cost_price:.2f}) is per single unit, but the market price "
+                f"(${market_price:.2f}) is for the pack. Real ROI if you buy "
+                f"{bundle_factor}: {corrected_roi_pct:.0f}% (vs {nominal_roi_pct:.0f}% shown)."
+            )
+            # Sigue siendo buena compra si el ROI corregido aguanta; si no, watch.
+            if corrected_roi_pct < 20 and recommendation in ("buy", "buy_small"):
+                recommendation = "watch"
+            elif recommendation == "buy":
+                recommendation = "buy_small"
+        else:
+            warnings.append(
+                "This Amazon listing may be a multipack and your cost looks per-unit. "
+                "The ROI shown may be inflated — verify the pack size before buying."
+            )
+            if recommendation == "buy":
+                recommendation = "buy_small"
+    elif size_mismatch:
+        warnings.append(
+            "The Amazon listing size appears to differ from the product you're pricing. "
+            "Your cost may be for a different size — verify pack/size before buying."
+        )
+        if recommendation == "buy":
+            recommendation = "buy_small"
 
     if max_buy is not None and max_buy.breakeven > 0 and cost_price > max_buy.breakeven:
         overpay = cost_price - max_buy.breakeven

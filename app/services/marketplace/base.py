@@ -79,6 +79,11 @@ class CompsResult:
     # Amazon FBA fees from Keepa (product-level, not estimated)
     fba_referral_pct: float | None = None   # e.g. 0.15 for 15%
     fba_fulfillment_fee: float | None = None  # e.g. 3.22 (pick & pack)
+    # Señales del producto evaluado (el que el usuario va a vender), para el
+    # guard de multipack. evaluated_package_quantity es None si Keepa no lo
+    # reporta (NUNCA 0): 'desconocido' debe distinguirse de '1'.
+    evaluated_title: str | None = None
+    evaluated_package_quantity: int | None = None
     # Data quality / scraper diagnostics (optional, does not affect core stats)
     query_used: str | None = None
     scrape_source: str | None = None

@@ -13,6 +13,7 @@ import httpx
 
 from app.config import settings
 from app.services.marketplace.base import CompsResult, MarketplaceClient, MarketplaceListing
+from app.services.marketplace.multipack import is_multipack_title
 
 logger = logging.getLogger(__name__)
 
@@ -51,32 +52,17 @@ def estimate_sales_per_day(sales_rank: int | None) -> float:
 
 MAX_REASONABLE_PRICE = 5000.0  # Cap de sanidad — filtrar precios > $5,000
 
-# Detecta "Pack of 2", "(3 pack)", "Twin Pack", "2-Pack", etc. en títulos de Amazon.
-# Muchos sellers registran packs con el mismo UPC de la unidad individual,
-# lo que contamina los comps con precios de multi-packs.
-_PACK_RE = re.compile(
-    r"(?:"
-    r"\bpack\s+of\s+(\d+)"          # "Pack of 2"
-    r"|\b(\d+)\s*[-\s]?pack\b"      # "3 pack", "3-pack", "2pack"
-    r"|\btwin\s+pack\b"             # "Twin Pack"
-    r"|\btriple\s+pack\b"           # "Triple Pack"
-    r"|\b(\d+)\s*[-\s]?count\b"     # "2 count" (solo si > 1)
-    r")",
-    re.IGNORECASE,
-)
-
 
 def _is_multipack(title: str) -> bool:
-    """True si el título indica un multi-pack (2+)."""
-    m = _PACK_RE.search(title)
-    if not m:
-        return False
-    # Extraer cantidad del grupo que matcheó
-    qty = m.group(1) or m.group(2) or m.group(3)
-    if qty:
-        return int(qty) > 1
-    # "Twin Pack" o "Triple Pack" sin número
-    return True
+    """True si el título indica un multi-pack INEQUÍVOCO ("Pack of N", "N-Pack"…).
+
+    Delega en multipack.is_multipack_title (fuente única de verdad). "N Count"/
+    "N ct" ya NO cuenta como multipack: es ambiguo (puede ser el descriptor de
+    la unidad base, p.ej. "Vitamin C, 100 Count" = 1 frasco) y tratarlo como pack
+    descartaba de los comps unidades sueltas válidas de categorías muy comunes
+    (vitaminas, baterías, K-cups, cosméticos).
+    """
+    return is_multipack_title(title)
 
 
 def _filter_multipacks(products: list[dict]) -> list[dict]:
@@ -102,6 +88,49 @@ def _extract_brand_model(product: dict) -> tuple[str | None, str | None]:
     brand = product.get("brand") or None
     model = product.get("model") or product.get("partNumber") or None
     return brand, model
+
+
+def _pick_main_product(products: list[dict]) -> dict | None:
+    """Producto 'principal' = el que el usuario evalúa (define el guard de pack).
+
+    Heurística: el de mejor (menor) sales rank real; fallback al primero. Usa
+    current[CSV_SALES_RANK], NO salesRankReference (que es un id de categoría,
+    no un rank — ver docs/AMAZON_ENGINE_FINDINGS.md #9).
+    """
+    if not products:
+        return None
+
+    def _rank(p: dict) -> int | None:
+        stats = p.get("stats") or {}
+        current = stats.get("current") or []
+        if len(current) > CSV_SALES_RANK:
+            r = current[CSV_SALES_RANK]
+            if r and r > 0:
+                return r
+        return None
+
+    with_rank = [(p, r) for p in products if (r := _rank(p)) is not None]
+    if with_rank:
+        return min(with_rank, key=lambda pr: pr[1])[0]
+    return products[0]
+
+
+def _extract_package_quantity(product: dict) -> int | None:
+    """Unidades del empaque según señales estructuradas de Keepa.
+
+    packageQuantity / numberOfItems. Devuelve None si no hay señal (NUNCA 0):
+    'desconocido' debe distinguirse de '1' para el guard de multipack.
+    """
+    for key in ("packageQuantity", "numberOfItems"):
+        val = product.get(key)
+        if val is not None:
+            try:
+                n = int(val)
+            except (TypeError, ValueError):
+                continue
+            if n >= 1:
+                return n
+    return None
 
 
 def _map_keepa_offers(product: dict) -> list[MarketplaceListing]:
@@ -468,6 +497,12 @@ class AmazonClient(MarketplaceClient):
         if best_rank:
             result.sales_per_day = estimate_sales_per_day(best_rank)
 
+        # Señales del producto evaluado para el guard de multipack (PR-M2).
+        main = _pick_main_product(products)
+        if main:
+            result.evaluated_title = main.get("title")
+            result.evaluated_package_quantity = _extract_package_quantity(main)
+
         logger.info(
             "Keepa: %d listings para '%s' (rank=%s, spd=%.1f)",
             len(all_listings),
@@ -547,6 +582,12 @@ class AmazonClient(MarketplaceClient):
 
         if best_rank:
             result.sales_per_day = estimate_sales_per_day(best_rank)
+
+        # Señales del producto evaluado para el guard de multipack (PR-M2).
+        main = _pick_main_product(products)
+        if main:
+            result.evaluated_title = main.get("title")
+            result.evaluated_package_quantity = _extract_package_quantity(main)
 
         logger.info(
             "Keepa: %d listings para '%s' (rank=%s, spd=%.1f)",
