@@ -82,7 +82,7 @@ from app.services.engines.cost_integrity import (
 )
 from app.services.engines.profit_engine import compute_profit
 from app.services.engines.size_match import detect_size_mismatch
-from app.services.marketplace.multipack import regex_bundle_factor
+from app.services.marketplace.multipack import extract_bundle_factor, regex_bundle_factor
 from app.services.engines.risk_engine import compute_risk
 from app.services.engines.seller_premium import compute_seller_premium
 from app.services.engines.title_risk import compute_title_risk
@@ -439,7 +439,10 @@ def _run_pipeline(
     mp_corrected_roi: float | None = None
     size_mismatch = False
     if marketplace_name == "amazon_fba" and pricing.market_list > 0:
-        mp_bundle_factor = regex_bundle_factor(raw_comps.evaluated_title)
+        # Usa el factor resuelto en la capa async (regex + LLM); si no, regex sync.
+        mp_bundle_factor = raw_comps.evaluated_bundle_factor
+        if mp_bundle_factor is None:
+            mp_bundle_factor = regex_bundle_factor(raw_comps.evaluated_title)
         mp_reason = multipack_mismatch_reason(
             cost_unit=cost_price,
             keepa_fba_fee=raw_comps.fba_fulfillment_fee,
@@ -1557,6 +1560,22 @@ async def run_analysis_progressive(
                     ebay_pipeline = ebay_pipeline2
         except Exception as e:
             logger.warning("eBay re-fetch failed: %s", e)
+
+    # Resolver el bundle_factor del producto evaluado con el LLM (PR-M4, gated).
+    # Solo corre para títulos "N count" ambiguos; el regex (síncrono en
+    # _run_pipeline) cubre los inequívocos. Se pre-puebla en evaluated_bundle_factor.
+    if (
+        settings.multipack_llm_enabled
+        and amazon_raw
+        and amazon_raw.evaluated_title
+        and amazon_raw.evaluated_bundle_factor is None
+    ):
+        try:
+            _bf = await extract_bundle_factor(amazon_raw.evaluated_title)
+            if _bf and _bf > 1:
+                amazon_raw.evaluated_bundle_factor = _bf
+        except Exception as e:
+            logger.warning("multipack LLM resolution failed: %s", e)
 
     amazon_pipeline: _PipelineResult | None = None
     if amazon_raw and amazon_raw.listings:

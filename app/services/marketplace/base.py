@@ -84,6 +84,9 @@ class CompsResult:
     # reporta (NUNCA 0): 'desconocido' debe distinguirse de '1'.
     evaluated_title: str | None = None
     evaluated_package_quantity: int | None = None
+    # bundle_factor resuelto en la capa async (regex + LLM opcional). Si None, el
+    # pipeline cae al regex síncrono sobre evaluated_title.
+    evaluated_bundle_factor: int | None = None
     # Data quality / scraper diagnostics (optional, does not affect core stats)
     query_used: str | None = None
     scrape_source: str | None = None

@@ -20,7 +20,40 @@ comps y el guard de coste para detectar el mismatch. Nunca lanza.
 
 from __future__ import annotations
 
+import json
+import logging
 import re
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_MODEL = "gemini-2.5-flash-lite"
+
+# Caché en memoria título→factor (el bundle de un ASIN no cambia). Cap simple.
+_LLM_CACHE: dict[str, int] = {}
+_CACHE_MAX = 2048
+
+_SYSTEM_PROMPT = (
+    "You are a packaging-quantity auditor for an Amazon arbitrage tool. Given an "
+    "Amazon product TITLE, determine the BUNDLE FACTOR: how many base "
+    "selling-units the listing bundles together.\n"
+    "\n"
+    "Rules:\n"
+    "1. The base selling-unit is the item as normally sold individually. Tokens "
+    "like '3 Count', '3ct', '2 oz', '500mg' usually DESCRIBE the base unit — they "
+    "are NOT a bundle multiplier.\n"
+    "2. A bundle multiplier is an explicit grouping of several base units: 'Pack "
+    "of N', 'N Pack', 'N-Pack', 'Case of N', 'Box of N', 'Set of N', 'Lot of N', "
+    "'Bundle of N'. 'N Count'/'N ct' is a multiplier ONLY when N clearly counts "
+    "whole units (e.g. 'Paper Towels, 12 Count' = 12 rolls), NOT the contents of "
+    "one unit (e.g. 'Condoms, 3 Count' = 3 per box → base unit, factor 1).\n"
+    "3. If the title has BOTH a unit descriptor and a bundle multiplier (e.g. "
+    "'3 Count (Pack of 12)'), the bundle factor is the multiplier (12), never the "
+    "descriptor (3).\n"
+    "4. If there is no bundle multiplier, the bundle factor is 1.\n"
+    "\n"
+    'Respond ONLY as JSON: {"bundle_factor": <integer >= 1>, '
+    '"base_unit": "<short>", "reasoning": "<1 sentence>"}.'
+)
 
 # Cota de cordura del factor. Un bundle inequívoco real rara vez supera ~144
 # (una "gross", 12 docenas). Por encima es casi seguro un número espurio del
@@ -107,3 +140,94 @@ def is_multipack_title(title: str) -> bool:
     """
     factor = regex_bundle_factor(title)
     return factor is not None and factor > 1
+
+
+def _parse_factor(raw: str | None) -> int | None:
+    """Parsea la respuesta JSON del LLM → bundle_factor (int en [1, MAX]) o None."""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    try:
+        factor = int(data.get("bundle_factor"))
+    except (TypeError, ValueError):
+        return None
+    if factor < 1 or factor > _MAX_REASONABLE_FACTOR:
+        return None
+    return factor
+
+
+def _cache_set(key: str, factor: int) -> None:
+    if len(_LLM_CACHE) >= _CACHE_MAX:
+        _LLM_CACHE.clear()  # política simple: vaciar al llegar al cap
+    _LLM_CACHE[key] = factor
+
+
+async def extract_bundle_factor(title: str, *, client=None, model: str | None = None) -> int | None:
+    """Cuántas unidades base agrupa el ASIN según su título (regex → LLM).
+
+    Contrato:
+      - >= 2 : multipack (el coste por-unidad debe escalarse).
+      - == 1 : unidad simple (sin señal de pack, o el LLM lo confirma).
+      - None : ambiguo y LLM no disponible/falló (el caller usa los otros gates).
+
+    Best-effort: NUNCA lanza. El LLM (Gemini Flash-Lite) SOLO se consulta para el
+    caso ambiguo "N Count"/"N ct" sin patrón inequívoco; los demás los resuelve el
+    regex sin red. `client` permite inyectar un AsyncOpenAI (tests).
+    """
+    if not title or not isinstance(title, str):
+        return None
+    # (1) Sin señal de pack → unidad simple, sin LLM.
+    if not has_pack_signal(title):
+        return 1
+    # (2) Patrón inequívoco → resuelto por regex, sin LLM.
+    rx = regex_bundle_factor(title)
+    if rx is not None:
+        return rx
+    # (3) Ambiguo ("N Count"/"N ct"): desambiguar con el LLM.
+    key = title.strip().lower()
+    cached = _LLM_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    owns_client = False
+    if client is None:
+        from app.core.llm import get_llm_client
+
+        client, model = get_llm_client(fast=True)
+        if client is None:
+            return None
+        owns_client = True
+    elif model is None:
+        model = _DEFAULT_MODEL
+
+    factor: int | None = None
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": json.dumps({"title": title.strip()}, ensure_ascii=False)},
+            ],
+        )
+        factor = _parse_factor(response.choices[0].message.content)
+    except Exception as e:
+        logger.warning("multipack LLM failed for %.50s: %s", title, e)
+        factor = None
+    finally:
+        if owns_client:
+            try:
+                await client.close()
+            except Exception:
+                pass
+
+    if factor is not None:
+        _cache_set(key, factor)
+        logger.info("multipack LLM: '%.50s' → bundle_factor=%d", title, factor)
+    return factor

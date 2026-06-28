@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     # Keepa (https://keepa.com) — datos de Amazon
     keepa_api_key: str = ""
 
+    # Multipack: usar el LLM (Gemini) para desambiguar "N count" en el título del
+    # ASIN (p.ej. "Paper Towels, 12 Count" = 12 vs "Condoms, 3 Count" = 1). OFF por
+    # defecto: el regex cubre los patrones inequívocos y los gates fee-ratio/
+    # package_quantity cubren el resto. Ver docs/MULTIPACK_IMPLEMENTATION.md (M4).
+    multipack_llm_enabled: bool = False
+
     # Apple App Store
     apple_bundle_id: str = ""              # e.g. "com.getflipiq.app"
     apple_shared_secret: str = ""          # App-specific shared secret
