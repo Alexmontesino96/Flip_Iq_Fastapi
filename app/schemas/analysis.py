@@ -33,6 +33,24 @@ class AnalysisRequest(BaseModel):
     product_type: str | None = None  # Override manual del tipo de producto
 
 
+class VariantPricesRequest(BaseModel):
+    """Solicitud de precios por variante para el drawer Multi-ASIN."""
+    asins: list[str]
+
+
+class VariantPrice(BaseModel):
+    asin: str
+    title: str | None = None
+    brand: str | None = None
+    image_url: str | None = None
+    median_price: float | None = None
+    buy_box_price: float | None = None
+
+
+class VariantPricesResponse(BaseModel):
+    prices: list[VariantPrice] = []
+
+
 class AsinAnalysisRequest(BaseModel):
     """Solicitud de análisis Amazon por ASIN directo."""
     asin: str

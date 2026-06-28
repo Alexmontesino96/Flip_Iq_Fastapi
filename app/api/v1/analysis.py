@@ -26,8 +26,11 @@ from app.schemas.analysis import (
     FlaggedItem,
     NotFoundItem,
     ProductDetailSubmission,
+    VariantPrice,
+    VariantPricesRequest,
+    VariantPricesResponse,
 )
-from app.services.analysis_service import run_analysis, run_analysis_asin, run_analysis_progressive, _analysis_semaphore
+from app.services.analysis_service import _get_amazon_client, run_analysis, run_analysis_asin, run_analysis_progressive, _analysis_semaphore
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +210,23 @@ async def analyze_by_asin(
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     response.headers["X-RateLimit-Tier"] = gate.tier
     return result
+
+
+@router.post("/variant-prices", response_model=VariantPricesResponse)
+async def variant_prices(
+    payload: VariantPricesRequest,
+    user: User | None = Depends(get_current_user_optional),
+):
+    """Precio de mercado de cada variante (candidate_asins) para el drawer Multi-ASIN.
+
+    Un solo request Keepa para hasta 20 ASINs. El frontend lo llama al abrir el
+    badge "Multi-ASIN" y calcula el margen de cada variante contra el cost_price.
+    """
+    if not payload.asins:
+        return VariantPricesResponse(prices=[])
+    amazon = _get_amazon_client()
+    prices = await amazon.get_variant_prices(payload.asins[:20])
+    return VariantPricesResponse(prices=[VariantPrice(**p) for p in prices])
 
 
 @router.post("/stream")

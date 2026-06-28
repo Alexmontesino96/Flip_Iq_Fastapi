@@ -101,6 +101,23 @@ def _extract_image_url(product: dict) -> str | None:
     return None
 
 
+def _extract_buy_box_price(product: dict) -> float | None:
+    """Precio actual del Buy Box (stats.current[18], centavos); fallback a New."""
+    stats = product.get("stats")
+    if not stats:
+        return None
+    current = stats.get("current")
+    if not current or len(current) <= CSV_BUY_BOX:
+        return None
+    bb = current[CSV_BUY_BOX]
+    if bb is not None and bb > 0:
+        return round(bb / 100.0, 2)
+    new = current[CSV_NEW] if len(current) > CSV_NEW else None
+    if new is not None and new > 0:
+        return round(new / 100.0, 2)
+    return None
+
+
 def _build_candidates(products: list[dict]) -> list[dict]:
     """Proyecta los products de Keepa a candidatos para el badge Multi-ASIN y el
     consenso de marca (identity.choose_candidate). Solo los que traen ASIN."""
@@ -683,3 +700,38 @@ class AmazonClient(MarketplaceClient):
             return CompsResult(marketplace="amazon")
 
         return self._build_comps_from_products(products, days, limit, label=asin)
+
+    async def get_variant_prices(self, asins: list[str]) -> list[dict]:
+        """Precio de mercado de cada ASIN candidato (drawer Multi-ASIN).
+
+        Un solo request Keepa para todos (cap 20). Devuelve por variante
+        {asin, title, brand, image_url, median_price, buy_box_price}; el frontend
+        calcula el margen contra el cost_price del producto que el usuario evalúa.
+        """
+        if not self._api_key or not asins:
+            return []
+
+        products = await self._keepa_product(asins[:20])
+        out: list[dict] = []
+        for p in products:
+            listings = _map_keepa_offers(p) + _map_buybox_history(p, days=90)
+            prices = sorted(
+                l.total_price or l.price for l in listings if (l.total_price or l.price)
+            )
+            median = None
+            if prices:
+                n = len(prices)
+                median = round(
+                    prices[n // 2] if n % 2 == 1
+                    else (prices[n // 2 - 1] + prices[n // 2]) / 2, 2,
+                )
+            brand, _ = _extract_brand_model(p)
+            out.append({
+                "asin": p.get("asin", ""),
+                "title": p.get("title"),
+                "brand": brand,
+                "image_url": _extract_image_url(p),
+                "median_price": median,
+                "buy_box_price": _extract_buy_box_price(p),
+            })
+        return out

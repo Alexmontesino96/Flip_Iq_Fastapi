@@ -197,3 +197,38 @@ class TestIdentityReviewDegradation:
         assert any("variant" in w.lower() for w in result.warnings)
         # Con identidad ambigua nunca se recomienda comprar.
         assert result.recommendation not in ("buy", "buy_small")
+
+
+class TestVariantPrices:
+    def test_extract_buy_box_price(self):
+        from app.services.marketplace.amazon import _extract_buy_box_price
+        assert _extract_buy_box_price({"stats": {"current": [None] * 18 + [2500]}}) == 25.0
+        # fallback a New (current[1]) si el buy box no tiene dato (-1)
+        assert _extract_buy_box_price(
+            {"stats": {"current": [None, 1800] + [None] * 16 + [-1]}}
+        ) == 18.0
+        assert _extract_buy_box_price({}) is None
+
+    async def test_get_variant_prices(self):
+        client = AmazonClient()
+        client._api_key = "fake"
+        products = [{
+            "asin": "B1", "brand": "Acme", "title": "Item A",
+            "stats": {"current": [None] * 18 + [2500]},
+            "offers": [{"offerCSV": [1000, 2400, 0], "condition": 1,
+                        "sellerName": "S", "isFBA": True}],
+        }]
+        client._keepa_product = AsyncMock(return_value=products)
+        result = await client.get_variant_prices(["B1"])
+        assert len(result) == 1
+        assert result[0]["asin"] == "B1"
+        assert result[0]["brand"] == "Acme"
+        assert result[0]["buy_box_price"] == 25.0
+        assert result[0]["median_price"] == 24.0
+
+    async def test_empty_and_no_key(self):
+        client = AmazonClient()
+        client._api_key = "fake"
+        assert await client.get_variant_prices([]) == []
+        client._api_key = ""
+        assert await client.get_variant_prices(["B1"]) == []
