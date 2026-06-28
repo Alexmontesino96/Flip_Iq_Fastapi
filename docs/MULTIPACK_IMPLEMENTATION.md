@@ -2,6 +2,13 @@
 
 > Plan detallado del componente **más grande** del port BatchFlip → FlipIQ: detección y corrección del mismatch coste-por-unidad vs precio-por-paquete. Acompaña a [`AMAZON_PORT_PLAN.md`](./AMAZON_PORT_PLAN.md) (visión global) y [`AMAZON_ENGINE_FINDINGS.md`](./AMAZON_ENGINE_FINDINGS.md) (bugs a no replicar).
 
+> **Estado (2026-06): IMPLEMENTADO.** M1–M5 completos y verificados (153 tests).
+> - **M1** ✅ extractor regex + fix del bug "N count" (`multipack.py`)
+> - **M2** ✅ cosecha de señales del producto evaluado (`CompsResult.evaluated_*`)
+> - **M3** ✅ guard de 3 gates + size + integración en `_validate_buy` (`cost_integrity.py`, `size_match.py`)
+> - **M4** ✅ LLM para "N count" ambiguo, gated por `multipack_llm_enabled` (OFF por defecto)
+> - **M5** ✅ persistencia en `engines_data` (auditoría/ML)
+
 ---
 
 ## 1. El problema (con números reales)

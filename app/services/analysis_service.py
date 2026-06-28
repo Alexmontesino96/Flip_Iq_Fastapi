@@ -697,6 +697,13 @@ def _pipeline_to_engines_dict(p: _PipelineResult) -> dict:
             "initial_days_requested": p.cleaned.initial_days_requested,
         },
         "warnings": p.warnings,
+        "cost_integrity": {
+            "is_likely_multipack": p.is_likely_multipack,
+            "bundle_factor": p.bundle_factor,
+            "corrected_profit": p.corrected_profit,
+            "corrected_roi_pct": p.corrected_roi_pct,
+            "multipack_reason": p.multipack_reason,
+        },
     }
 
 

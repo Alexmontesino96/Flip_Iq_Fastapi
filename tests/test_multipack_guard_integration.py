@@ -6,7 +6,7 @@ calcula el ROI corregido y NO toca el profit nominal (invariante AC-3).
 
 from datetime import datetime, timezone
 
-from app.services.analysis_service import _run_pipeline
+from app.services.analysis_service import _pipeline_to_engines_dict, _run_pipeline
 from app.services.marketplace.base import CompsResult, MarketplaceListing
 
 
@@ -96,3 +96,19 @@ class TestMultipackGuardIntegration:
         # El guard solo corre para amazon_fba.
         assert result.is_likely_multipack is False
         assert result.bundle_factor is None
+
+    def test_persisted_in_engines_data(self):
+        # M5: el guard se persiste en engines_data (auditoría/ML).
+        raw = _amazon_comps(
+            "Trojan Condoms (Pack of 12)", 28.80, fba_fee=4.20, package_quantity=1,
+        )
+        result = _run_pipeline(
+            raw, keyword="trojan condoms", condition="any", cost_price=1.30,
+            marketplace_name="amazon_fba",
+        )
+        engines = _pipeline_to_engines_dict(result)
+        ci = engines["cost_integrity"]
+        assert ci["is_likely_multipack"] is True
+        assert ci["bundle_factor"] == 12
+        assert ci["multipack_reason"] == "title_bundle"
+        assert ci["corrected_roi_pct"] is not None
