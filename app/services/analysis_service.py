@@ -284,6 +284,10 @@ class _PipelineResult:
     corrected_profit: float | None = None
     corrected_roi_pct: float | None = None
     multipack_reason: str | None = None
+    # Multi-ASIN (badge para elegir variante cuando el UPC resuelve a varios ASINs)
+    candidate_asins: list | None = None
+    identity_needs_review: bool = False
+    identity_reason: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +481,16 @@ def _run_pipeline(
         ),
     )
 
+    # Identidad ambigua (Multi-ASIN sin marca mayoritaria): los comps pueden mezclar
+    # variantes/marcas → degradar y pedir que el usuario elija la variante correcta.
+    if raw_comps.identity_needs_review:
+        warnings.append(
+            "This UPC resolves to conflicting brands — the comps may mix products. "
+            "Pick the correct variant before buying."
+        )
+        if recommendation in ("buy", "buy_small"):
+            recommendation = "watch"
+
     for warning in cleaned.data_quality_warnings:
         if warning not in warnings:
             warnings.append(warning)
@@ -597,6 +611,9 @@ def _run_pipeline(
         corrected_profit=mp_corrected_profit,
         corrected_roi_pct=mp_corrected_roi,
         multipack_reason=mp_reason,
+        candidate_asins=raw_comps.candidate_asins,
+        identity_needs_review=raw_comps.identity_needs_review,
+        identity_reason=raw_comps.identity_reason,
     )
 
 
@@ -631,6 +648,9 @@ def _pipeline_to_marketplace_analysis(p: _PipelineResult) -> MarketplaceAnalysis
         corrected_profit=p.corrected_profit,
         corrected_roi_pct=p.corrected_roi_pct,
         multipack_reason=p.multipack_reason,
+        candidate_asins=p.candidate_asins,
+        identity_review=p.identity_needs_review,
+        identity_reason=p.identity_reason,
     )
 
 
@@ -703,6 +723,11 @@ def _pipeline_to_engines_dict(p: _PipelineResult) -> dict:
             "corrected_profit": p.corrected_profit,
             "corrected_roi_pct": p.corrected_roi_pct,
             "multipack_reason": p.multipack_reason,
+        },
+        "identity": {
+            "needs_review": p.identity_needs_review,
+            "reason": p.identity_reason,
+            "candidate_count": len(p.candidate_asins) if p.candidate_asins else 0,
         },
     }
 

@@ -13,6 +13,7 @@ import httpx
 
 from app.config import settings
 from app.services.marketplace.base import CompsResult, MarketplaceClient, MarketplaceListing
+from app.services.marketplace.identity import MAJORITY_MIN_SHARE, choose_candidate
 from app.services.marketplace.multipack import is_multipack_title
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,37 @@ def _extract_brand_model(product: dict) -> tuple[str | None, str | None]:
     brand = product.get("brand") or None
     model = product.get("model") or product.get("partNumber") or None
     return brand, model
+
+
+def _extract_image_url(product: dict) -> str | None:
+    """URL de la primera imagen del producto Keepa (imagesCSV → hash)."""
+    images_csv = product.get("imagesCSV")
+    if images_csv:
+        first_hash = images_csv.split(",")[0].strip()
+        if first_hash:
+            return f"https://images-na.ssl-images-amazon.com/images/I/{first_hash}"
+    return None
+
+
+def _build_candidates(products: list[dict]) -> list[dict]:
+    """Proyecta los products de Keepa a candidatos para el badge Multi-ASIN y el
+    consenso de marca (identity.choose_candidate). Solo los que traen ASIN."""
+    out: list[dict] = []
+    for p in products:
+        asin = p.get("asin")
+        if not asin:
+            continue
+        brand, _ = _extract_brand_model(p)
+        title = p.get("title")
+        out.append({
+            "asin": asin,
+            "title": title,
+            "brand": brand,
+            "package_quantity": p.get("packageQuantity") or p.get("numberOfItems"),
+            "is_multipack": is_multipack_title(title or ""),
+            "image_url": _extract_image_url(p),
+        })
+    return out
 
 
 def _pick_main_product(products: list[dict]) -> dict | None:
@@ -374,10 +406,40 @@ class AmazonClient(MarketplaceClient):
             return CompsResult(marketplace="amazon")
 
         products: list[dict] = []
+        candidate_asins: list | None = None
+        identity_needs_review = False
+        identity_reason: str | None = None
 
         # Intentar por barcode primero
         if barcode:
             products = await self._keepa_product_by_code(barcode)
+            # Multi-ASIN: un UPC/EAN puede resolver a varios ASINs (variantes o
+            # contaminación de catálogo). Consenso de marca (anti-contaminación)
+            # SOLO en el path por code; en keyword las marcas distintas son
+            # legítimas (productos distintos que matchean el término).
+            if products:
+                cands = _build_candidates(products)
+                if len(cands) > 1:
+                    choice = choose_candidate(barcode, cands)
+                    candidate_asins = cands
+                    identity_needs_review = choice.needs_review
+                    identity_reason = choice.reason
+                    # Descartar los contaminantes de otra marca antes de armar los
+                    # comps SIEMPRE que haya una marca dominante CLARA (≥60%) que
+                    # coincide con la elegida (cubre la corrección Y default_ok con
+                    # mayoría — la mediana no debe mezclar el producto equivocado).
+                    # Conservador: si el filtro dejara 0, no filtra; si no hay mayoría
+                    # clara (caso ambiguo), no se filtra (lo decide el usuario).
+                    if (
+                        choice.chosen_brand
+                        and choice.chosen_brand == choice.dominant_brand
+                        and choice.dominant_share >= MAJORITY_MIN_SHARE
+                    ):
+                        kept = [
+                            p for p in products
+                            if (p.get("brand") or "").strip().lower() == choice.chosen_brand
+                        ]
+                        products = kept or products
 
         # Si no hay resultados por barcode, buscar por keyword
         if not products and keyword:
@@ -502,6 +564,11 @@ class AmazonClient(MarketplaceClient):
         if main:
             result.evaluated_title = main.get("title")
             result.evaluated_package_quantity = _extract_package_quantity(main)
+
+        # Multi-ASIN: candidatos del UPC + flag de revisión de identidad.
+        result.candidate_asins = candidate_asins
+        result.identity_needs_review = identity_needs_review
+        result.identity_reason = identity_reason
 
         logger.info(
             "Keepa: %d listings para '%s' (rank=%s, spd=%.1f)",

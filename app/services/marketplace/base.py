@@ -87,6 +87,13 @@ class CompsResult:
     # bundle_factor resuelto en la capa async (regex + LLM opcional). Si None, el
     # pipeline cae al regex síncrono sobre evaluated_title.
     evaluated_bundle_factor: int | None = None
+    # Multi-ASIN: cuando un UPC/EAN resuelve a varios ASINs (variantes/contaminación
+    # de catálogo). Lista [{asin,title,brand,package_quantity,image_url}] para el
+    # badge "Multi-ASIN". identity_needs_review = el consenso de marca no halló una
+    # mayoría clara → el usuario debe elegir. Solo se puebla en el path por barcode.
+    candidate_asins: list | None = None
+    identity_needs_review: bool = False
+    identity_reason: str | None = None
     # Data quality / scraper diagnostics (optional, does not affect core stats)
     query_used: str | None = None
     scrape_source: str | None = None

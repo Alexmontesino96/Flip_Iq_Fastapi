@@ -287,6 +287,11 @@ class MarketplaceAnalysis(BaseModel):
     corrected_profit: float | None = None
     corrected_roi_pct: float | None = None
     multipack_reason: str | None = None  # "fee_ratio" | "package_quantity" | "title_bundle"
+    # Multi-ASIN: el UPC resolvió a varias variantes. El frontend pinta el badge y
+    # deja elegir; la selección re-analiza vía el endpoint por ASIN directo.
+    candidate_asins: list | None = None  # [{asin,title,brand,package_quantity,image_url}]
+    identity_review: bool = False        # marcas en conflicto sin mayoría → elegir
+    identity_reason: str | None = None
 
 
 class MarketEventOut(BaseModel):
