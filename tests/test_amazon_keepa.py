@@ -708,7 +708,7 @@ class TestAIExplanationComparison:
                 comparison_text=comp_text,
             )
 
-            assert result == "Análisis comparativo OK"
+            assert result == "Decision: YES\nAnálisis comparativo OK"
             # Verificar que el comparison_text se incluyó en el prompt
             call_args = mock_client.chat.completions.create.call_args
             messages = call_args.kwargs["messages"]

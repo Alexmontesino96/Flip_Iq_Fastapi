@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 from datetime import datetime, timezone
 
 import stripe
@@ -17,6 +18,30 @@ logger = logging.getLogger("flipiq.stripe")
 
 stripe.api_key = settings.stripe_secret_key
 stripe.api_version = "2025-04-30.basil"
+
+
+def _schedule_plan_integration_updates(user: User, tier: str) -> None:
+    """Best-effort sync to optional marketing/notification integrations."""
+    try:
+        from app.services import customerio
+    except ModuleNotFoundError as e:
+        if e.name != "customerio":
+            raise
+        logger.warning("Customer.io SDK unavailable; skipping plan sync")
+    else:
+        asyncio.create_task(customerio.update_plan(user.id, tier))
+
+    if user.onesignal_subscription_id:
+        try:
+            from app.services import onesignal
+        except ModuleNotFoundError as e:
+            if e.name != "onesignal":
+                raise
+            logger.warning("OneSignal SDK unavailable; skipping tier tag sync")
+        else:
+            asyncio.create_task(
+                onesignal.update_tier_tag(user.onesignal_subscription_id, tier)
+            )
 
 # ---------------------------------------------------------------------------
 # Plan configuration — map price IDs to internal tier names
@@ -283,12 +308,7 @@ async def _handle_subscription_updated(event: stripe.Event, db: AsyncSession) ->
     if user:
         user.tier = plan if sub.status in ("active", "trialing") else "free"
         _set_credits(user, plan if sub.status in ("active", "trialing") else "free")
-        import asyncio
-        from app.services import customerio
-        asyncio.create_task(customerio.update_plan(user.id, user.tier))
-        if user.onesignal_subscription_id:
-            from app.services import onesignal
-            asyncio.create_task(onesignal.update_tier_tag(user.onesignal_subscription_id, user.tier))
+        _schedule_plan_integration_updates(user, user.tier)
 
     await db.commit()
 
@@ -313,12 +333,7 @@ async def _handle_subscription_deleted(event: stripe.Event, db: AsyncSession) ->
     if user:
         user.tier = "free"
         _set_credits(user, "free")
-        import asyncio
-        from app.services import customerio
-        asyncio.create_task(customerio.update_plan(user.id, "free"))
-        if user.onesignal_subscription_id:
-            from app.services import onesignal
-            asyncio.create_task(onesignal.update_tier_tag(user.onesignal_subscription_id, "free"))
+        _schedule_plan_integration_updates(user, "free")
 
     await db.commit()
 
@@ -399,12 +414,7 @@ async def _upsert_subscription(
     # Sync user tier
     user.tier = plan if sub.status in ("active", "trialing") else "free"
     _set_credits(user, user.tier)
-    import asyncio
-    from app.services import customerio
-    asyncio.create_task(customerio.update_plan(user.id, user.tier))
-    if user.onesignal_subscription_id:
-        from app.services import onesignal
-        asyncio.create_task(onesignal.update_tier_tag(user.onesignal_subscription_id, user.tier))
+    _schedule_plan_integration_updates(user, user.tier)
 
     await db.commit()
     return db_sub

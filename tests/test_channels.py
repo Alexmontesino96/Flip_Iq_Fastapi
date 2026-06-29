@@ -1,6 +1,7 @@
 """Tests para ChannelBreakdown labels, is_estimated, y warnings."""
 
 from app.schemas.analysis import AnalysisSummary, BuyBox, ChannelBreakdown, Returns, SalePlan
+from app.core.fees import MARKETPLACE_CALCULATORS
 from app.services.analysis_service import _calculate_all_channels
 
 
@@ -64,11 +65,15 @@ class TestChannelBreakdownSchema:
 
 class TestCalculateAllChannels:
     def test_best_profit_label_assigned(self):
-        channels = _calculate_all_channels(10.0, 50.0)
+        channels = _calculate_all_channels(
+            10.0, 50.0, has_own_data=set(MARKETPLACE_CALCULATORS)
+        )
         assert channels[0].label == "BEST PROFIT"
 
     def test_best_roi_label_when_different(self):
-        channels = _calculate_all_channels(10.0, 50.0)
+        channels = _calculate_all_channels(
+            10.0, 50.0, has_own_data=set(MARKETPLACE_CALCULATORS)
+        )
         labels = [ch.label for ch in channels if ch.label is not None]
         # Al menos BEST PROFIT existe
         assert "BEST PROFIT" in labels

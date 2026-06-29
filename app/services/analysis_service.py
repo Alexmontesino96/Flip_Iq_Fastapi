@@ -728,6 +728,7 @@ def _pipeline_to_engines_dict(p: _PipelineResult) -> dict:
             "needs_review": p.identity_needs_review,
             "reason": p.identity_reason,
             "candidate_count": len(p.candidate_asins) if p.candidate_asins else 0,
+            "candidate_asins": p.candidate_asins,
         },
     }
 

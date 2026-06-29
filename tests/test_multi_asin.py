@@ -199,6 +199,66 @@ class TestIdentityReviewDegradation:
         assert result.recommendation not in ("buy", "buy_small")
 
 
+class TestMultiAsinPersistence:
+    def test_reconstruction_preserves_identity_and_multipack_fields(self):
+        from datetime import datetime, timezone
+
+        from app.api.v1.analysis import _reconstruct_marketplace_analysis
+        from app.services.analysis_service import _pipeline_to_engines_dict, _run_pipeline
+        from app.services.marketplace.base import CompsResult, MarketplaceListing
+
+        candidate_asins = [
+            {
+                "asin": "B1",
+                "title": "Soap Single",
+                "brand": "BrandA",
+                "package_quantity": 1,
+                "is_multipack": False,
+                "image_url": None,
+            },
+            {
+                "asin": "B2",
+                "title": "Soap Pack of 12",
+                "brand": "BrandB",
+                "package_quantity": 12,
+                "is_multipack": True,
+                "image_url": None,
+            },
+        ]
+        listings = [
+            MarketplaceListing(
+                title="Soap Pack of 12",
+                price=24 + i,
+                condition="new",
+                marketplace="amazon",
+                item_id="B2",
+                total_price=24 + i,
+                ended_at=datetime.now(timezone.utc),
+            )
+            for i in range(12)
+        ]
+        raw = CompsResult.from_listings(listings, marketplace="amazon", days=30)
+        raw.evaluated_title = "Soap (Pack of 12)"
+        raw.candidate_asins = candidate_asins
+        raw.identity_needs_review = True
+        raw.identity_reason = "ambiguous_brand_conflict"
+
+        result = _run_pipeline(
+            raw, keyword="soap", condition="any", cost_price=2.0,
+            marketplace_name="amazon_fba",
+        )
+        engines = _pipeline_to_engines_dict(result)
+        reconstructed = _reconstruct_marketplace_analysis(engines, "amazon")
+
+        assert engines["identity"]["candidate_asins"] == candidate_asins
+        assert reconstructed["candidate_asins"] == candidate_asins
+        assert reconstructed["identity_review"] is True
+        assert reconstructed["identity_reason"] == "ambiguous_brand_conflict"
+        assert reconstructed["is_likely_multipack"] is True
+        assert reconstructed["bundle_factor"] == 12
+        assert reconstructed["corrected_roi_pct"] is not None
+
+
 class TestVariantPrices:
     def test_extract_buy_box_price(self):
         from app.services.marketplace.amazon import _extract_buy_box_price

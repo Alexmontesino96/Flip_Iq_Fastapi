@@ -55,6 +55,8 @@ def _reconstruct_marketplace_analysis(
     max_buy = mp_engines.get("max_buy", {})
     competition = mp_engines.get("competition", {})
     trend = mp_engines.get("trend", {})
+    cost_integrity = mp_engines.get("cost_integrity", {}) or {}
+    identity = mp_engines.get("identity", {}) or {}
     estimated_sale = pricing.get("market_list") if pricing else None
     return {
         "marketplace": marketplace,
@@ -108,6 +110,15 @@ def _reconstruct_marketplace_analysis(
         } if trend else None,
         "opportunity_score": mp_engines.get("opportunity_score"),
         "recommendation": mp_engines.get("recommendation"),
+        "warnings": mp_engines.get("warnings", []),
+        "is_likely_multipack": cost_integrity.get("is_likely_multipack", False),
+        "bundle_factor": cost_integrity.get("bundle_factor"),
+        "corrected_profit": cost_integrity.get("corrected_profit"),
+        "corrected_roi_pct": cost_integrity.get("corrected_roi_pct"),
+        "multipack_reason": cost_integrity.get("multipack_reason"),
+        "candidate_asins": identity.get("candidate_asins"),
+        "identity_review": identity.get("needs_review", False),
+        "identity_reason": identity.get("reason"),
     }
 
 

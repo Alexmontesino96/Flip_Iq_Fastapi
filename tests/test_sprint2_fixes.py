@@ -49,9 +49,9 @@ class TestAIExplanationTruncation:
             )
 
             assert result is not None
-            # Verificar que se usaron más tokens (500 base con comparación)
+            # Verificar que se usaron más tokens (500 base + 200 comparación)
             call_kwargs = mock_client.chat.completions.create.call_args.kwargs
-            assert call_kwargs["max_tokens"] == 500  # 300 base + 200 comparison
+            assert call_kwargs["max_tokens"] == 700
 
     @pytest.mark.asyncio
     async def test_base_tokens_without_comparison(self):
@@ -80,7 +80,7 @@ class TestAIExplanationTruncation:
 
             assert result is not None
             call_kwargs = mock_client.chat.completions.create.call_args.kwargs
-            assert call_kwargs["max_tokens"] == 300
+            assert call_kwargs["max_tokens"] == 500
 
     @pytest.mark.asyncio
     async def test_retry_on_truncation(self):
