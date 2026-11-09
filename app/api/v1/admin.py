@@ -415,3 +415,49 @@ async def list_webhook_events(
             for e in rows
         ]
     }
+
+
+@router.get("/analyses")
+async def list_analyses(
+    tier: str | None = None,
+    recommendation: str | None = None,
+    limit: int = Query(50, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Recent analyses with product title and user email/tier."""
+    _require_admin(user)
+
+    query = (
+        select(Analysis, Product.title, User.email, User.tier)
+        .join(Product, Analysis.product_id == Product.id)
+        .outerjoin(User, Analysis.user_id == User.id)
+        .order_by(Analysis.created_at.desc())
+    )
+    if tier:
+        query = query.where(User.tier == tier)
+    if recommendation:
+        query = query.where(Analysis.recommendation == recommendation)
+    query = query.offset(offset).limit(limit)
+
+    rows = (await db.execute(query)).all()
+
+    return {
+        "analyses": [
+            {
+                "id": a.id,
+                "user_email": email,
+                "user_tier": user_tier,
+                "product_title": title,
+                "marketplace": a.marketplace,
+                "cost_price": float(a.cost_price) if a.cost_price is not None else None,
+                "recommendation": a.recommendation,
+                "flip_score": a.flip_score,
+                "opportunity_score": a.opportunity_score,
+                "no_comps_found": a.no_comps_found,
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+            }
+            for a, title, email, user_tier in rows
+        ]
+    }

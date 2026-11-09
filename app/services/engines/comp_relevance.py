@@ -11,12 +11,38 @@ Resuelve el problema de variantes semánticas que regex no puede distinguir:
 Costo: ~$0.00005/análisis con Gemini 2.5 Flash.
 """
 
+import asyncio
 import json
 import logging
 
 from app.services.marketplace.base import CompsResult
 
 logger = logging.getLogger(__name__)
+
+
+async def _log_training_samples(
+    keyword: str,
+    titles: list[str],
+    verdicts: list[int],
+    provider: str,
+) -> None:
+    """Fire-and-forget: guarda pares (keyword, title, verdict) para ML training."""
+    try:
+        from app.database import async_session
+        from app.models.ml_training import MLTrainingSample
+
+        async with async_session() as session:
+            for title, verdict in zip(titles, verdicts):
+                session.add(MLTrainingSample(
+                    task="comp_relevance",
+                    input_keyword=keyword,
+                    input_title=title,
+                    llm_output={"verdict": verdict},
+                    llm_provider=provider,
+                ))
+            await session.commit()
+    except Exception as e:
+        logger.debug("ML training log failed (non-critical): %s", e)
 
 _SYSTEM_PROMPT = """You are a product matching expert for resellers.
 Given a search keyword and numbered listing titles, classify each as 1 (same product) or 0 (different product).
@@ -176,7 +202,14 @@ async def _call_llm(
             return None
 
     raw_text = response.choices[0].message.content.strip()
-    return _parse_response(raw_text, len(titles))
+    verdicts = _parse_response(raw_text, len(titles))
+
+    # Log para ML training (fire-and-forget)
+    if verdicts is not None:
+        provider = "gemini" if "gemini" in model.lower() else "openai"
+        asyncio.create_task(_log_training_samples(keyword, titles, verdicts, provider))
+
+    return verdicts
 
 
 def _parse_response(raw_text: str, expected_len: int) -> list[int] | None:
